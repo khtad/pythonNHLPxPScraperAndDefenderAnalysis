@@ -3,6 +3,7 @@ import sqlite3
 
 from nhl_api import get_game_ids_for_date, get_play_by_play_data
 from database import create_table, insert_data, create_connection
+from center_analysis import (calculate_faceoffs_per_minute, update_elo_ratings, identify_center_by_elo)
 
 def main():
     database = "nhl_data.db"
@@ -32,6 +33,21 @@ def main():
 
     conn.close()
 
+    database = "nhl_data.db"
+    game_id = "2007020003"
+
+    faceoffs_per_minute = calculate_faceoffs_per_minute(database, game_id)
+
+    # Initialize Elo ratings for players
+    elo_ratings = {player_id: 1500 for player_id in faceoffs_per_minute.keys()}
+
+    # Update Elo ratings based on faceoff outcomes
+    updated_elo_ratings = update_elo_ratings(database, game_id, elo_ratings)
+
+    # Identify the center using Elo ratings
+    center = identify_center_by_elo(updated_elo_ratings)
+
+    print(f"The center in game {game_id} is player {center}.")
 
 if __name__ == "__main__":
     main()
