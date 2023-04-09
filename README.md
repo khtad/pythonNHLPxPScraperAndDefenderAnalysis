@@ -20,44 +20,34 @@ This project retrieves and stores NHL play-by-play game data from the 2007-2008 
 ## Installation
 
 1. Clone the repository:
-
-\```
-git clone https://github.com/yourusername/nhl-data-analysis.git
-\```
+    ```
+    git clone https://github.com/yourusername/nhl-data-analysis.git
 
 2. Change directory to the project folder:
-
-\```
-cd nhl-data-analysis
-\```
+    ```
+    cd nhl-data-analysis
 
 3. Install the required Python libraries:
-
-\```
-pip install -r requirements.txt
-\```
+    ```
+    pip install -r requirements.txt
 
 ## Usage
 
 1. Run the `main.py` script to fetch and store NHL play-by-play game data:
-
-\```
-python main.py
-\```
+    ```
+    python main.py
 
 2. Use the `team_performance` function to analyze team performance for specific games:
+    ```
+    from team_performance import team_performance
 
-\```python
-from team_performance import team_performance
+    database = "nhl_data.db"
+    game_id = "2007020003"
+    team_id = 5
+    top_defenseman_id = 33
 
-database = "nhl_data.db"
-game_id = "2007020003"
-team_id = 5
-top_defenseman_id = 33
-
-performance_data = team_performance(database, game_id, team_id, top_defenseman_id)
-print(performance_data)
-\```
+    performance_data = team_performance(database, game_id, team_id, top_defenseman_id)
+    print(performance_data)
 
 Replace `game_id`, `team_id`, and `top_defenseman_id` with appropriate values for the game and team you want to analyze.
 
