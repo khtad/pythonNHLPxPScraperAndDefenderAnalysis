@@ -1,54 +1,47 @@
-# NHL Data Analysis
+# NHL Play-by-Play Scraper and Database
 
-This project retrieves and stores NHL play-by-play game data from the 2007-2008 season to the present day. It analyzes team performance, focusing on how a team performs with and without its top defenseman in the lineup. The project uses Python for data collection, processing, and analysis, and SQLite for data storage.
+This project builds a **queryable SQLite database** of NHL play-by-play (PxP) data from NHL.com, starting with the first season where modern PxP data is widely available (2007-08).
 
-## Features
+## Goals
 
-- Fetch play-by-play game data from the NHL API
-- Store game data in an SQLite database
-- Identify the top defenseman for each team
-- Calculate team performance metrics, including shooting percentage for unblocked shots, save percentage at different strengths, and marginal goals scored and conceded per game while missing the top defenseman
-- Retrieve data for specific games from the SQLite database
+- Backfill NHL game logs from 2007 onward.
+- Respect strict rate limits: **at most one game-log request per minute**.
+- Store normalized game/event data in SQLite.
+- Provide a Pandas-friendly query layer for analytics and later feature engineering.
 
-## Requirements
+## Tech Stack
 
-- Python 3.6 or higher
-- Requests library
-- Beautiful Soup library
+- Python 3.10+
+- Pandas
+- Requests
 - SQLite
+- Pytest
 
-## Installation
+## Project Layout
 
-1. Clone the repository:
-    ```
-    git clone https://github.com/yourusername/nhl-data-analysis.git
+- `nhl_pxp/api.py`: NHL API client.
+- `nhl_pxp/rate_limit.py`: one-request-per-minute limiter.
+- `nhl_pxp/storage.py`: SQLite schema + upserts.
+- `nhl_pxp/scraper.py`: backfill/update orchestration.
+- `nhl_pxp/query.py`: DataFrame query interface.
+- `main.py`: CLI entrypoint.
+- `tests/`: unit tests.
 
-2. Change directory to the project folder:
-    ```
-    cd nhl-data-analysis
+## Quick Start
 
-3. Install the required Python libraries:
-    ```
-    pip install -r requirements.txt
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py --database nhl_pxp.db --start-date 2007-09-01 --end-date 2007-09-03
+```
 
-## Usage
+### Nightly update example
 
-1. Run the `main.py` script to fetch and store NHL play-by-play game data:
-    ```
-    python main.py
+```bash
+python main.py --database nhl_pxp.db --mode daily
+```
 
-2. Use the `team_performance` function to analyze team performance for specific games:
-    ```
-    from team_performance import team_performance
+## Notes on Runtime
 
-    database = "nhl_data.db"
-    game_id = "2007020003"
-    team_id = 5
-    top_defenseman_id = 33
-
-    performance_data = team_performance(database, game_id, team_id, top_defenseman_id)
-    print(performance_data)
-
-Replace `game_id`, `team_id`, and `top_defenseman_id` with appropriate values for the game and team you want to analyze.
-
----
+The initial backfill is intentionally slow due to the required limit of one game-log request per minute. This protects reliability and avoids overloading NHL endpoints.

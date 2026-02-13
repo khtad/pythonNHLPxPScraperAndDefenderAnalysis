@@ -1,53 +1,46 @@
-import datetime
-import sqlite3
+from __future__ import annotations
 
-from nhl_api import get_game_ids_for_date, get_play_by_play_data
-from database import create_table, insert_data, create_connection
-from center_analysis import (calculate_faceoffs_per_minute, update_elo_ratings, identify_center_by_elo)
+import argparse
+from datetime import date, datetime, timedelta
 
-def main():
-    database = "nhl_data.db"
-    start_date = datetime.date(2007, 10, 3)
-    end_date = datetime.date.today()
+from nhl_pxp.api import NHLApiClient
+from nhl_pxp.query import NHLPxpQueryService
+from nhl_pxp.scraper import NHLPxpScraper
+from nhl_pxp.storage import NHLPxpRepository
 
-    # Connect to the database
-    conn = create_connection(database)
 
-    # Loop through all dates between start_date and end_date
-    current_date = start_date
-    while current_date <= end_date:
-        game_ids = get_game_ids_for_date(current_date)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="NHL PxP scraper and SQLite builder")
+    parser.add_argument("--database", default="nhl_pxp.db", help="SQLite database path")
+    parser.add_argument("--mode", choices=["backfill", "daily"], default="backfill")
+    parser.add_argument("--start-date", default="2007-09-01", help="Backfill start date (YYYY-MM-DD)")
+    parser.add_argument("--end-date", default=date.today().isoformat(), help="Backfill end date (YYYY-MM-DD)")
+    parser.add_argument("--show-sample", action="store_true", help="Print sample queried rows after scrape")
+    return parser.parse_args()
 
-        # Loop for fetching game data
-        for game_id in game_ids:
-            # Fetch play-by-play data for the game
-            play_by_play_data = get_play_by_play_data(game_id)
 
-            # If data is fetched successfully, create a table for the game and insert the data
-            if play_by_play_data:
-                create_table(conn, game_id)
-                insert_data(conn, game_id, play_by_play_data)
+def main() -> None:
+    args = parse_args()
 
-        # Increment the current date by 1 day
-        current_date += datetime.timedelta(days=1)
+    repository = NHLPxpRepository(args.database)
+    api = NHLApiClient()
+    scraper = NHLPxpScraper(api=api, repository=repository)
 
-    conn.close()
+    if args.mode == "daily":
+        target_date = date.today() - timedelta(days=1)
+        stats = scraper.run_daily_update(target_date)
+    else:
+        start = datetime.strptime(args.start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(args.end_date, "%Y-%m-%d").date()
+        stats = scraper.backfill(start, end)
 
-    database = "nhl_data.db"
-    game_id = "2007020003"
+    print(stats)
 
-    faceoffs_per_minute = calculate_faceoffs_per_minute(database, game_id)
+    if args.show_sample:
+        query = NHLPxpQueryService(args.database)
+        print(query.games_dataframe(limit=5))
+        print(query.events_dataframe(limit=5))
 
-    # Initialize Elo ratings for players
-    elo_ratings = {player_id: 1500 for player_id in faceoffs_per_minute.keys()}
-
-    # Update Elo ratings based on faceoff outcomes
-    updated_elo_ratings = update_elo_ratings(database, game_id, elo_ratings)
-
-    # Identify the center using Elo ratings
-    center = identify_center_by_elo(updated_elo_ratings)
-
-    print(f"The center in game {game_id} is player {center}.")
 
 if __name__ == "__main__":
     main()
