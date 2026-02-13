@@ -35,3 +35,11 @@ def test_get_game_ids_for_date_parses_schedule_payload():
     game_ids = client.get_game_ids_for_date(date(2007, 10, 3))
 
     assert game_ids == [2007020001, 2007020002]
+
+
+def test_get_game_ids_for_date_handles_empty_schedule():
+    client = NHLApiClient(session=DummySession({"dates": []}))
+
+    game_ids = client.get_game_ids_for_date(date(2007, 10, 4))
+
+    assert game_ids == []
