@@ -1,47 +1,55 @@
-# NHL Play-by-Play Scraper and Database
+# NHL Play-by-Play Scraper and Analysis
 
-This project builds a **queryable SQLite database** of NHL play-by-play (PxP) data from NHL.com, starting with the first season where modern PxP data is widely available (2007-08).
+This project collects NHL play-by-play data from the NHL Stats API, stores it in SQLite, and includes analysis helpers for player/lineup performance.
 
-## Goals
+## What the project currently does
 
-- Backfill NHL game logs from 2007 onward.
-- Respect strict rate limits: **at most one game-log request per minute**.
-- Store normalized game/event data in SQLite.
-- Provide a Pandas-friendly query layer for analytics and later feature engineering.
+- Scrapes NHL game IDs by date and downloads play-by-play events
+- Stores each game in SQLite (`nhl_data.db`) as a separate table (`game_<game_id>`)
+- Logs API errors to `error_log.txt`
+- Includes center-identification logic using faceoff-derived Elo calculations (`center_analysis.py`)
+- Includes additional team/defenseman helper functions in `data_processing.py` and `nhl_api.py`
+
+## Project structure
+
+- `main.py`: end-to-end ingestion loop and example center-identification run
+- `nhl_api.py`: NHL API requests and parsing helpers
+- `database.py`: SQLite table creation and inserts
+- `center_analysis.py`: faceoff rates and Elo-based center identification
+- `data_processing.py`: game/team performance helper functions
+- `error_handling.py`: simple file-based error logger
 
 ## Tech Stack
 
-- Python 3.10+
-- Pandas
-- Requests
-- SQLite
-- Pytest
+- Python 3.8+
+- SQLite (bundled with standard Python installations)
+- Python packages listed in `requirements.txt`
 
 ## Project Layout
 
-- `nhl_pxp/api.py`: NHL API client.
-- `nhl_pxp/rate_limit.py`: one-request-per-minute limiter.
-- `nhl_pxp/storage.py`: SQLite schema + upserts.
-- `nhl_pxp/scraper.py`: backfill/update orchestration.
-- `nhl_pxp/query.py`: DataFrame query interface.
-- `main.py`: CLI entrypoint.
-- `tests/`: unit tests.
-
-## Quick Start
+1. Clone the repository.
+2. Open a terminal in the project directory.
+3. Install dependencies:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
-python main.py --database nhl_pxp.db --start-date 2007-09-01 --end-date 2007-09-03
 ```
 
 ### Nightly update example
 
+Run the main pipeline:
+
 ```bash
-python main.py --database nhl_pxp.db --mode daily
+python main.py
 ```
 
-## Notes on Runtime
+By default, `main.py`:
 
-The initial backfill is intentionally slow due to the required limit of one game-log request per minute. This protects reliability and avoids overloading NHL endpoints.
+- Pulls game data from 2007-10-03 through today
+- Writes game events into `nhl_data.db`
+- Runs an example center-identification workflow for game `2007020003`
+
+## Notes
+
+- The full historical scrape can take a long time and make many API calls.
+- If API requests fail, details are appended to `error_log.txt`.
