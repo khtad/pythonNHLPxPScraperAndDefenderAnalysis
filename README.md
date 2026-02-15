@@ -1,54 +1,55 @@
-# NHL Data Analysis
+# NHL Play-by-Play Scraper and Analysis
 
-This project retrieves and stores NHL play-by-play game data from the 2007-2008 season to the present day. It analyzes team performance, focusing on how a team performs with and without its top defenseman in the lineup. The project uses Python for data collection, processing, and analysis, and SQLite for data storage.
+This project collects NHL play-by-play data from the NHL Stats API, stores it in SQLite, and includes analysis helpers for player/lineup performance.
 
-## Features
+## What the project currently does
 
-- Fetch play-by-play game data from the NHL API
-- Store game data in an SQLite database
-- Identify the top defenseman for each team
-- Calculate team performance metrics, including shooting percentage for unblocked shots, save percentage at different strengths, and marginal goals scored and conceded per game while missing the top defenseman
-- Retrieve data for specific games from the SQLite database
+- Scrapes NHL game IDs by date and downloads play-by-play events
+- Stores each game in SQLite (`nhl_data.db`) as a separate table (`game_<game_id>`)
+- Logs API errors to `error_log.txt`
+- Includes center-identification logic using faceoff-derived Elo calculations (`center_analysis.py`)
+- Includes additional team/defenseman helper functions in `data_processing.py` and `nhl_api.py`
+
+## Project structure
+
+- `main.py`: end-to-end ingestion loop and example center-identification run
+- `nhl_api.py`: NHL API requests and parsing helpers
+- `database.py`: SQLite table creation and inserts
+- `center_analysis.py`: faceoff rates and Elo-based center identification
+- `data_processing.py`: game/team performance helper functions
+- `error_handling.py`: simple file-based error logger
 
 ## Requirements
 
-- Python 3.6 or higher
-- Requests library
-- Beautiful Soup library
-- SQLite
+- Python 3.8+
+- SQLite (bundled with standard Python installations)
+- Python packages listed in `requirements.txt`
 
 ## Installation
 
-1. Clone the repository:
-    ```
-    git clone https://github.com/yourusername/nhl-data-analysis.git
+1. Clone the repository.
+2. Open a terminal in the project directory.
+3. Install dependencies:
 
-2. Change directory to the project folder:
-    ```
-    cd nhl-data-analysis
-
-3. Install the required Python libraries:
-    ```
-    pip install -r requirements.txt
+```bash
+pip install -r requirements.txt
+```
 
 ## Usage
 
-1. Run the `main.py` script to fetch and store NHL play-by-play game data:
-    ```
-    python main.py
+Run the main pipeline:
 
-2. Use the `team_performance` function to analyze team performance for specific games:
-    ```
-    from team_performance import team_performance
+```bash
+python main.py
+```
 
-    database = "nhl_data.db"
-    game_id = "2007020003"
-    team_id = 5
-    top_defenseman_id = 33
+By default, `main.py`:
 
-    performance_data = team_performance(database, game_id, team_id, top_defenseman_id)
-    print(performance_data)
+- Pulls game data from 2007-10-03 through today
+- Writes game events into `nhl_data.db`
+- Runs an example center-identification workflow for game `2007020003`
 
-Replace `game_id`, `team_id`, and `top_defenseman_id` with appropriate values for the game and team you want to analyze.
+## Notes
 
----
+- The full historical scrape can take a long time and make many API calls.
+- If API requests fail, details are appended to `error_log.txt`.
