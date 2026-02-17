@@ -1,6 +1,7 @@
 # database.py
 
 import sqlite3
+from datetime import date, datetime
 from sqlite3 import Error
 
 
@@ -35,6 +36,60 @@ def insert_data(conn, table_name, data_list):
         cursor.execute(insert_query, values)
 
     conn.commit()
+
+def create_collection_log_table(conn):
+    cursor = conn.cursor()
+    cursor.execute("""CREATE TABLE IF NOT EXISTS collection_log (
+                        date TEXT PRIMARY KEY,
+                        games_found INTEGER NOT NULL,
+                        games_collected INTEGER NOT NULL,
+                        completed_at TEXT
+                      );""")
+    conn.commit()
+
+
+def is_game_collected(conn, game_id):
+    cursor = conn.cursor()
+    table_name = f"game_{game_id}"
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,)
+    )
+    if cursor.fetchone() is None:
+        return False
+    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+    return cursor.fetchone()[0] > 0
+
+
+def mark_date_collected(conn, date_str, games_found, games_collected):
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO collection_log (date, games_found, games_collected, completed_at) "
+        "VALUES (?, ?, ?, ?)",
+        (date_str, games_found, games_collected, datetime.now().isoformat())
+    )
+    conn.commit()
+
+
+def get_last_collected_date(conn):
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(date) FROM collection_log WHERE completed_at IS NOT NULL")
+    row = cursor.fetchone()
+    if row and row[0]:
+        return date.fromisoformat(row[0])
+    return None
+
+
+def is_date_range_collected(conn, start_date, end_date):
+    total_days = (end_date - start_date).days + 1
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM collection_log "
+        "WHERE date >= ? AND date <= ? AND completed_at IS NOT NULL",
+        (start_date.isoformat(), end_date.isoformat())
+    )
+    return cursor.fetchone()[0] == total_days
+
 
 def create_connection(database_file):
     """
