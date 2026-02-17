@@ -1,16 +1,28 @@
 # database.py
 
+import re
 import sqlite3
 from datetime import date, datetime
 from sqlite3 import Error
 
 
+def _quote_identifier(name):
+    """Return a safely double-quoted SQLite identifier.
+
+    Validates that the name contains only word characters (letters, digits,
+    underscores) before quoting, preventing SQL injection via identifier names.
+    """
+    if not re.match(r'^\w+$', name):
+        raise ValueError(f"Invalid identifier: {name!r}")
+    return f'"{name}"'
+
+
 def create_table(conn, table_name):
     cursor = conn.cursor()
 
-    table_name = f"game_{table_name}"  # Add the prefix to the table name
+    quoted = _quote_identifier(f"game_{table_name}")
 
-    create_table_query = f"""CREATE TABLE IF NOT EXISTS {table_name} (
+    create_table_query = f"""CREATE TABLE IF NOT EXISTS {quoted} (
                                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                                 period INTEGER,
                                 time TEXT,
@@ -26,14 +38,14 @@ def create_table(conn, table_name):
 def insert_data(conn, table_name, data_list):
     cursor = conn.cursor()
 
-    table_name = f"game_{table_name}"  # Add the prefix to the table name
+    quoted = _quote_identifier(f"game_{table_name}")
 
     for data in data_list:
         columns = ', '.join(data.keys())
         placeholders = ', '.join(['?' for _ in data.keys()])
         values = tuple(data.values())
 
-        insert_query = f"INSERT OR IGNORE INTO {table_name} ({columns}) VALUES ({placeholders})"
+        insert_query = f"INSERT OR IGNORE INTO {quoted} ({columns}) VALUES ({placeholders})"
         cursor.execute(insert_query, values)
 
     conn.commit()
@@ -58,7 +70,7 @@ def is_game_collected(conn, game_id):
     )
     if cursor.fetchone() is None:
         return False
-    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+    cursor.execute(f"SELECT COUNT(*) FROM {_quote_identifier(table_name)}")
     return cursor.fetchone()[0] > 0
 
 
@@ -111,7 +123,9 @@ def deduplicate_existing_tables(conn):
 
         print(f"Deduplicating and migrating {table_name}...")
         temp_name = f"{table_name}_dedup_tmp"
-        cursor.execute(f"""CREATE TABLE {temp_name} (
+        quoted = _quote_identifier(table_name)
+        quoted_temp = _quote_identifier(temp_name)
+        cursor.execute(f"""CREATE TABLE {quoted_temp} (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             period INTEGER,
                             time TEXT,
@@ -120,11 +134,11 @@ def deduplicate_existing_tables(conn):
                             UNIQUE(period, time, event, description)
                          )""")
         cursor.execute(
-            f"INSERT OR IGNORE INTO {temp_name} (period, time, event, description) "
-            f"SELECT period, time, event, description FROM {table_name}"
+            f"INSERT OR IGNORE INTO {quoted_temp} (period, time, event, description) "
+            f"SELECT period, time, event, description FROM {quoted}"
         )
-        cursor.execute(f"DROP TABLE {table_name}")
-        cursor.execute(f"ALTER TABLE {temp_name} RENAME TO {table_name}")
+        cursor.execute(f"DROP TABLE {quoted}")
+        cursor.execute(f"ALTER TABLE {quoted_temp} RENAME TO {quoted}")
 
     conn.commit()
 
