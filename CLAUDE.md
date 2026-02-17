@@ -74,7 +74,10 @@ Requires Python 3.8+. The only external dependency is `requests`.
 - No rate limiting — a full historical scrape from 2007 issues many rapid API requests
 - Duplicate data on re-run: `INSERT` has no deduplication checks
 - Table names constructed via f-string (not parameterized) — safe only because `game_id` comes from the NHL API as an integer
-- Unreachable code in `nhl_api.py:22-24` after the status code checks
+
+## Pre-Submission Checklist
+
+- **Unreachable code**: Check all control paths in every modified function for unreachable code. Verify that no statements follow unconditional `return`, `raise`, `break`, or `continue` within the same block, and that mutually exclusive conditions (e.g., `!= 200` then `== 200`) don't leave dead code after the final branch.
 
 ## Development Notes
 
