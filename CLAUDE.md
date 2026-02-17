@@ -53,7 +53,7 @@ Requires Python 3.8+. The only external dependency is `requests`.
 - SQLite via Python's built-in `sqlite3` module
 - One persistent connection for the entire scrape run
 - Tables use `CREATE TABLE IF NOT EXISTS` for idempotency (re-runs won't fail on existing tables, but will insert duplicate rows)
-- Table names are dynamically constructed with f-strings: `f"game_{game_id}"`
+- Table names are dynamically constructed and safely quoted via `_quote_identifier()`, which validates the name against `^\w+$` and wraps it in double quotes per the SQLite identifier-quoting convention
 
 ### Error Handling
 - API errors print to stdout and return empty list / None
@@ -77,7 +77,7 @@ Requires Python 3.8+. The only external dependency is `requests`.
 
 - No `.gitignore` at repository root (IDE `.idea/` directory is tracked)
 - Duplicate data on re-run: `INSERT` has no deduplication checks
-- Table names constructed via f-string (not parameterized) — safe only because `game_id` comes from the NHL API as an integer
+- Table names are validated and double-quoted via `_quote_identifier()` before interpolation into SQL — SQLite does not support `?` placeholders for identifiers, so double-quoting with `^\w+$` validation is the standard safe approach
 
 ## Pre-Submission Checklist
 
