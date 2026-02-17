@@ -3,7 +3,8 @@ import datetime
 from nhl_api import get_game_ids_for_date, get_play_by_play_data
 from database import (create_table, insert_data, create_connection,
                       create_collection_log_table, is_game_collected,
-                      mark_date_collected, get_last_collected_date)
+                      mark_date_collected, get_last_collected_date,
+                      deduplicate_existing_tables)
 
 def main():
     database = "nhl_data.db"
@@ -13,6 +14,7 @@ def main():
     # Connect to the database
     conn = create_connection(database)
     create_collection_log_table(conn)
+    deduplicate_existing_tables(conn)
 
     # Resume from the day after the last fully-collected date
     last_collected = get_last_collected_date(conn)

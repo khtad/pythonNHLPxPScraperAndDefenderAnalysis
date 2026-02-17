@@ -15,7 +15,8 @@ def create_table(conn, table_name):
                                 period INTEGER,
                                 time TEXT,
                                 event TEXT,
-                                description TEXT
+                                description TEXT,
+                                UNIQUE(period, time, event, description)
                              );"""
 
     cursor.execute(create_table_query)
@@ -32,7 +33,7 @@ def insert_data(conn, table_name, data_list):
         placeholders = ', '.join(['?' for _ in data.keys()])
         values = tuple(data.values())
 
-        insert_query = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+        insert_query = f"INSERT OR IGNORE INTO {table_name} ({columns}) VALUES ({placeholders})"
         cursor.execute(insert_query, values)
 
     conn.commit()
@@ -89,6 +90,43 @@ def is_date_range_collected(conn, start_date, end_date):
         (start_date.isoformat(), end_date.isoformat())
     )
     return cursor.fetchone()[0] == total_days
+
+
+def deduplicate_existing_tables(conn):
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'game_%'"
+    )
+    game_tables = [row[0] for row in cursor.fetchall()]
+
+    for table_name in game_tables:
+        # Check if the UNIQUE constraint already exists by inspecting the table SQL
+        cursor.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,)
+        )
+        create_sql = cursor.fetchone()[0]
+        if "UNIQUE(period, time, event, description)" in create_sql:
+            continue
+
+        print(f"Deduplicating and migrating {table_name}...")
+        temp_name = f"{table_name}_dedup_tmp"
+        cursor.execute(f"""CREATE TABLE {temp_name} (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            period INTEGER,
+                            time TEXT,
+                            event TEXT,
+                            description TEXT,
+                            UNIQUE(period, time, event, description)
+                         )""")
+        cursor.execute(
+            f"INSERT OR IGNORE INTO {temp_name} (period, time, event, description) "
+            f"SELECT period, time, event, description FROM {table_name}"
+        )
+        cursor.execute(f"DROP TABLE {table_name}")
+        cursor.execute(f"ALTER TABLE {temp_name} RENAME TO {table_name}")
+
+    conn.commit()
 
 
 def create_connection(database_file):
