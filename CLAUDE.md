@@ -58,7 +58,12 @@ Requires Python 3.8+. The only external dependency is `requests`.
 ### Error Handling
 - API errors print to stdout and return empty list / None
 - Database errors caught via `sqlite3.Error`
-- No retry logic or rate limiting on API calls
+- No retry logic on API calls
+
+### Rate Limiting
+- Game API calls (`get_play_by_play_data`) are rate-limited to one call per 15 seconds
+- Enforced via `time.monotonic()` tracking in `nhl_api.py`
+- Schedule API calls (`get_game_ids_for_date`) are not rate-limited
 
 ## Code Conventions
 
@@ -71,13 +76,13 @@ Requires Python 3.8+. The only external dependency is `requests`.
 ## Known Limitations
 
 - No `.gitignore` at repository root (IDE `.idea/` directory is tracked)
-- No rate limiting — a full historical scrape from 2007 issues many rapid API requests
 - Duplicate data on re-run: `INSERT` has no deduplication checks
 - Table names constructed via f-string (not parameterized) — safe only because `game_id` comes from the NHL API as an integer
 
 ## Pre-Submission Checklist
 
 - **Unreachable code**: Check all control paths in every modified function for unreachable code. Verify that no statements follow unconditional `return`, `raise`, `break`, or `continue` within the same block, and that mutually exclusive conditions (e.g., `!= 200` then `== 200`) don't leave dead code after the final branch.
+- **Interface simplicity**: Review all new or modified function signatures and module boundaries. Minimize the number of parameters, avoid unnecessary configuration options, and prefer simple interfaces over flexible ones. If a function can accomplish its job with fewer arguments or a narrower return type, simplify it before submitting.
 
 ## Development Notes
 
