@@ -9,19 +9,14 @@ def get_game_ids_for_date(date):
         print(error_message)
         return []
 
-    if response.status_code == 200:
-        data = response.json()
-
-        if data["dates"]:
-            game_ids = [game["gamePk"] for game in data["dates"][0]["games"]]
-            return game_ids
-        else:
-            print(f"No games found for date {date}")
-            return []
-
     data = response.json()
-    game_ids = [game["gamePk"] for game in data["dates"][0]["games"]]
-    return game_ids
+
+    if data["dates"]:
+        game_ids = [game["gamePk"] for game in data["dates"][0]["games"]]
+        return game_ids
+    else:
+        print(f"No games found for date {date}")
+        return []
 
 def get_play_by_play_data(game_id):
     url = f"https://statsapi.web.nhl.com/api/v1/game/{game_id}/feed/live"
