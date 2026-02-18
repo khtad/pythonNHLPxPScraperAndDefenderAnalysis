@@ -12,7 +12,7 @@ NHL Play-by-Play (PXP) Data Scraper. Fetches play-by-play event data from the NH
 ├── database.py       # SQLite operations (connection, table creation, inserts)
 ├── requirements.txt  # Python dependencies (requests)
 ├── README.md         # Project documentation
-└── .idea/            # JetBrains IDE configuration (tracked in git)
+└── .gitignore        # Git ignore rules (IDE files, .db files, virtualenvs)
 ```
 
 ## Architecture & Data Flow
@@ -71,13 +71,53 @@ Requires Python 3.8+. The only external dependency is `requests`.
 - **Naming**: snake_case for all functions and variables
 - **Imports**: Standard library first, then third-party, then local modules
 - **Error reporting**: `print()` statements (no logging framework)
-- **No tests**: The project has no test suite or testing framework
+- **Testing**: See the Testing Strategy section below for planned test coverage
 
 ## Known Limitations
 
-- No `.gitignore` at repository root (IDE `.idea/` directory is tracked)
-- Duplicate data on re-run: `INSERT` has no deduplication checks
-- Table names are validated and double-quoted via `_quote_identifier()` before interpolation into SQL — SQLite does not support `?` placeholders for identifiers, so double-quoting with `^\w+$` validation is the standard safe approach
+- `create_connection()` returns `None` on failure, but `main()` does not guard against this — a connection error will raise `AttributeError` on the first database call rather than producing a clear error message
+- `insert_data()` interpolates column names from dictionary keys into SQL without validation; `_quote_identifier()` is only applied to table names. This is currently safe because the column names originate from hard-coded string literals in `nhl_api.py`, but the function's interface does not enforce that
+- No retry logic on API calls — transient network errors cause silent data gaps
+- No logging framework — all diagnostic output goes through `print()` to stdout with no severity levels or configurability
+
+## Testing Strategy
+
+### Framework
+
+Use `pytest` with the standard library `unittest.mock` for mocking. No additional test dependencies beyond `pytest` itself.
+
+### Why not 100% coverage?
+
+100% test coverage is not a worthwhile objective for this project. The codebase is small and procedural, and several functions sit at boundaries where tests would provide little value:
+
+- **`main()`** is pure orchestration glue. Testing it requires mocking both the API and database layers simultaneously, producing tests that duplicate the implementation rather than verifying behavior. Changes to `main()` would require parallel changes to its tests, adding maintenance cost without catching real bugs.
+- **`create_connection()`** is a thin wrapper around `sqlite3.connect()`. Its success path tests the standard library; its failure path (returning `None`) is a known limitation, not behavior to enshrine as correct.
+- **Rate-limiting logic** in `get_play_by_play_data()` depends on global mutable state and `time.sleep()`. It is simple enough to verify by inspection, and testing it requires patching multiple time functions for low payoff.
+
+The goal is to cover the code that is most likely to break in ways that matter: data parsing, identifier safety, and database read/write correctness.
+
+### Functions to test
+
+#### `database.py` — test with in-memory SQLite (`sqlite3.connect(":memory:")`)
+
+| Function | What to test |
+|---|---|
+| `_quote_identifier(name)` | Valid word-character names return double-quoted strings; names containing spaces, semicolons, quotes, or empty strings raise `ValueError` |
+| `create_table(conn, table_name)` | Table `game_{table_name}` exists after call; calling twice does not raise (idempotency); `UNIQUE(period, time, event, description)` constraint is present in the created schema |
+| `insert_data(conn, table_name, data_list)` | Rows are retrievable after insert; duplicate rows are silently ignored (`INSERT OR IGNORE`) rather than raising |
+| `create_collection_log_table(conn)` | `collection_log` table exists with expected columns after call |
+| `is_game_collected(conn, game_id)` | Returns `False` when table does not exist; returns `False` when table exists but is empty; returns `True` when table has rows |
+| `mark_date_collected(conn, date_str, games_found, games_collected)` | Row is present in `collection_log` after call; calling again with the same date replaces the row (`INSERT OR REPLACE`) |
+| `get_last_collected_date(conn)` | Returns `None` on an empty `collection_log`; returns the most recent date when multiple entries exist |
+| `is_date_range_collected(conn, start_date, end_date)` | Returns `True` when every date in the range has a completed entry; returns `False` when any date is missing |
+| `deduplicate_existing_tables(conn)` | Duplicate rows are removed; the `UNIQUE` constraint is present after migration; tables that already have the constraint are left untouched |
+
+#### `nhl_api.py` — test with `unittest.mock.patch` on `requests.get`
+
+| Function | What to test |
+|---|---|
+| `get_game_ids_for_date(date)` | Returns list of game IDs from well-formed schedule JSON; returns `[]` on non-200 status; returns `[]` when `dates` list is empty |
+| `get_play_by_play_data(game_id)` | Returns correctly shaped list of dicts from well-formed live-feed JSON; returns `None` on non-200 status; returns `[]` when `allPlays` is empty; handles missing nested keys (e.g., no `about` or `result` in a play) gracefully |
 
 ## Pre-Submission Checklist
 
