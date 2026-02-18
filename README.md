@@ -26,6 +26,8 @@ This project is now focused on one purpose only: scrape NHL play-by-play (PXP) d
 pip install -r requirements.txt
 ```
 
+This installs runtime dependencies (`requests`) and test dependencies (`pytest`).
+
 ## Usage
 
 ```bash
@@ -33,6 +35,21 @@ python main.py
 ```
 
 `main.py` currently scrapes from `2007-10-03` through today and stores results in `nhl_data.db`.
+
+## Testing
+
+Run the automated logical-unit and mock-based tests with:
+
+```bash
+pytest -q
+```
+
+Current test coverage includes:
+
+- `database.py` behavior tests against in-memory SQLite
+- `nhl_api.py` parsing/error-path tests using `unittest.mock.patch` on `requests.get`
+
+No live NHL API calls are made during tests.
 
 ## Notes
 

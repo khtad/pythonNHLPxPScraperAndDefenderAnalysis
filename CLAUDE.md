@@ -119,6 +119,24 @@ The goal is to cover the code that is most likely to break in ways that matter: 
 | `get_game_ids_for_date(date)` | Returns list of game IDs from well-formed schedule JSON; returns `[]` on non-200 status; returns `[]` when `dates` list is empty |
 | `get_play_by_play_data(game_id)` | Returns correctly shaped list of dicts from well-formed live-feed JSON; returns `None` on non-200 status; returns `[]` when `allPlays` is empty; handles missing nested keys (e.g., no `about` or `result` in a play) gracefully |
 
+## Testing Implementation Status
+
+- Implemented the strategy in `tests/test_database.py` and `tests/test_nhl_api.py`.
+- Added test path bootstrap in `tests/conftest.py` so pytest can reliably import project modules from the repository root.
+- Verified logical-unit and mockup tests complete successfully via `pytest -q` (`25 passed`).
+
+### Test Errors Encountered During Implementation
+
+1. **Pytest collection import errors (`ModuleNotFoundError` for `database` and `nhl_api`)**
+   - Cause: Running tests from the repository root did not automatically place the project root on `sys.path` in this environment.
+   - Resolution: Added `tests/conftest.py` to insert the repository root into `sys.path` before tests import modules.
+
+### Rules to Prevent Similar Future Test-Writing Errors
+
+- Add an explicit pytest import-path setup (e.g., `tests/conftest.py` or equivalent packaging config) before writing module-level imports in test files.
+- Run a quick `pytest -q` smoke test immediately after creating the first test file to catch collection-time issues early.
+- Keep tests isolated from runtime side effects by using in-memory SQLite and `unittest.mock.patch` for network calls.
+
 ## Pre-Submission Checklist
 
 - **Unreachable code**: Check all control paths in every modified function for unreachable code. Verify that no statements follow unconditional `return`, `raise`, `break`, or `continue` within the same block, and that mutually exclusive conditions (e.g., `!= 200` then `== 200`) don't leave dead code after the final branch.
