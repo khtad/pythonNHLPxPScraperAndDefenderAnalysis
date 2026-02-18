@@ -5,14 +5,19 @@ import pytest
 
 from database import (
     _quote_identifier,
+    create_core_dimension_tables,
     create_collection_log_table,
+    create_player_game_features_table,
+    create_player_game_stats_table,
     create_table,
+    ensure_player_database_schema,
     deduplicate_existing_tables,
     get_last_collected_date,
     insert_data,
     is_date_range_collected,
     is_game_collected,
     mark_date_collected,
+    validate_player_game_stats_quality,
 )
 
 
@@ -189,3 +194,134 @@ def test_deduplicate_existing_tables_leaves_already_unique_tables_untouched(conn
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM game_2023020006")
     assert cur.fetchone()[0] == 1
+
+
+def test_phase_2_create_core_dimension_tables_creates_players_games_teams(conn):
+    create_core_dimension_tables(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('players', 'games', 'teams')"
+    )
+    existing = {row[0] for row in cur.fetchall()}
+
+    assert existing == {"players", "games", "teams"}
+
+
+def test_phase_2_players_table_has_expected_primary_key(conn):
+    create_core_dimension_tables(conn)
+    cur = conn.cursor()
+
+    cur.execute("PRAGMA table_info(players)")
+    table_info = {row[1]: row for row in cur.fetchall()}
+
+    assert table_info["player_id"][5] == 1
+
+
+def test_phase_3_create_player_game_stats_table_and_indexes(conn):
+    create_player_game_stats_table(conn)
+    cur = conn.cursor()
+
+    cur.execute("PRAGMA index_list(player_game_stats)")
+    index_names = {row[1] for row in cur.fetchall()}
+
+    assert "idx_player_game_stats_game_id" in index_names
+    assert "idx_player_game_stats_position_group_game_id" in index_names
+
+
+def test_phase_3_player_game_stats_unique_on_player_game(conn):
+    create_player_game_stats_table(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO player_game_stats (
+            player_id, game_id, team_id, position_group, toi_seconds
+        ) VALUES (8478402, 2023020001, 10, 'F', 600)
+        """
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        cur.execute(
+            """
+            INSERT INTO player_game_stats (
+                player_id, game_id, team_id, position_group, toi_seconds
+            ) VALUES (8478402, 2023020001, 10, 'F', 610)
+            """
+        )
+
+
+def test_phase_4_create_player_game_features_table(conn):
+    create_player_game_features_table(conn)
+    cur = conn.cursor()
+
+    cur.execute("PRAGMA table_info(player_game_features)")
+    cols = {row[1] for row in cur.fetchall()}
+
+    assert {
+        "player_id",
+        "game_id",
+        "season",
+        "game_number_for_player",
+        "toi_rank_pos_5g",
+        "toi_rank_pos_10g",
+        "toi_rolling_mean_5g",
+        "points_rolling_10g",
+        "feature_set_version",
+    }.issubset(cols)
+
+
+def test_phase_5_validate_player_game_stats_quality_reports_errors(conn):
+    create_player_game_stats_table(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO player_game_stats (
+            player_id, game_id, team_id, position_group, toi_seconds
+        ) VALUES
+            (1, 2023021001, 10, 'F', -1),
+            (2, 2023021001, 10, 'X', 4500)
+        """
+    )
+    conn.commit()
+
+    report = validate_player_game_stats_quality(conn)
+
+    assert report["invalid_position_group_rows"] == 1
+    assert report["negative_toi_rows"] == 1
+    assert report["toi_above_max_rows"] == 1
+
+
+def test_phase_5_validate_player_game_stats_quality_no_errors_on_valid_data(conn):
+    create_player_game_stats_table(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO player_game_stats (
+            player_id, game_id, team_id, position_group, toi_seconds
+        ) VALUES
+            (1, 2023021002, 10, 'F', 900),
+            (2, 2023021002, 10, 'D', 1200),
+            (3, 2023021002, 10, 'G', 3600)
+        """
+    )
+    conn.commit()
+
+    report = validate_player_game_stats_quality(conn)
+
+    assert report == {
+        "duplicate_player_game_rows": 0,
+        "negative_toi_rows": 0,
+        "toi_above_max_rows": 0,
+        "invalid_position_group_rows": 0,
+    }
+
+
+def test_ensure_player_database_schema_is_idempotent(conn):
+    ensure_player_database_schema(conn)
+    ensure_player_database_schema(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='player_game_features'"
+    )
+    assert cur.fetchone() is not None
