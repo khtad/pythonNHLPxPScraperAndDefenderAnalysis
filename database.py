@@ -143,6 +143,137 @@ def deduplicate_existing_tables(conn):
     conn.commit()
 
 
+def create_core_dimension_tables(conn):
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS players (
+            player_id INTEGER PRIMARY KEY,
+            first_name TEXT,
+            last_name TEXT,
+            shoots_catches TEXT,
+            position TEXT,
+            team_id INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS games (
+            game_id INTEGER PRIMARY KEY,
+            game_date TEXT,
+            season TEXT,
+            home_team_id INTEGER,
+            away_team_id INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS teams (
+            team_id INTEGER PRIMARY KEY,
+            team_abbrev TEXT,
+            team_name TEXT
+        )
+        """
+    )
+    conn.commit()
+
+
+def create_player_game_stats_table(conn):
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS player_game_stats (
+            player_id INTEGER NOT NULL,
+            game_id INTEGER NOT NULL,
+            team_id INTEGER,
+            position_group TEXT NOT NULL,
+            toi_seconds INTEGER NOT NULL DEFAULT 0,
+            goals INTEGER NOT NULL DEFAULT 0,
+            assists INTEGER NOT NULL DEFAULT 0,
+            shots INTEGER NOT NULL DEFAULT 0,
+            blocks INTEGER NOT NULL DEFAULT 0,
+            hits INTEGER NOT NULL DEFAULT 0,
+            penalties_drawn INTEGER NOT NULL DEFAULT 0,
+            penalties_taken INTEGER NOT NULL DEFAULT 0,
+            faceoff_wins INTEGER NOT NULL DEFAULT 0,
+            faceoff_losses INTEGER NOT NULL DEFAULT 0,
+            xgf REAL NOT NULL DEFAULT 0,
+            xga REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (player_id, game_id)
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_player_game_stats_game_id ON player_game_stats(game_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_player_game_stats_position_group_game_id ON player_game_stats(position_group, game_id)"
+    )
+    conn.commit()
+
+
+def create_player_game_features_table(conn):
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS player_game_features (
+            player_id INTEGER NOT NULL,
+            game_id INTEGER NOT NULL,
+            season TEXT,
+            game_number_for_player INTEGER,
+            toi_rank_pos_5g REAL,
+            toi_rank_pos_10g REAL,
+            toi_rolling_mean_5g REAL,
+            points_rolling_10g REAL,
+            feature_set_version TEXT DEFAULT 'v1',
+            PRIMARY KEY (player_id, game_id)
+        )
+        """
+    )
+    conn.commit()
+
+
+def validate_player_game_stats_quality(conn, max_toi_seconds=3600):
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT player_id, game_id, COUNT(*) AS row_count
+            FROM player_game_stats
+            GROUP BY player_id, game_id
+            HAVING COUNT(*) > 1
+        )
+        """
+    )
+    duplicate_player_game_rows = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM player_game_stats WHERE toi_seconds < 0")
+    negative_toi_rows = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM player_game_stats WHERE toi_seconds > ?", (max_toi_seconds,))
+    toi_above_max_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        "SELECT COUNT(*) FROM player_game_stats WHERE position_group NOT IN ('F', 'D', 'G')"
+    )
+    invalid_position_group_rows = cursor.fetchone()[0]
+
+    return {
+        "duplicate_player_game_rows": duplicate_player_game_rows,
+        "negative_toi_rows": negative_toi_rows,
+        "toi_above_max_rows": toi_above_max_rows,
+        "invalid_position_group_rows": invalid_position_group_rows,
+    }
+
+
+def ensure_player_database_schema(conn):
+    create_core_dimension_tables(conn)
+    create_player_game_stats_table(conn)
+    create_player_game_features_table(conn)
+
+
 def create_connection(database_file):
     """
     Create a database connection to the SQLite database specified by the database_file
