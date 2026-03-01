@@ -7,15 +7,18 @@ NHL Play-by-Play (PXP) scraper with a normalized player analytics schema. Raw ev
 ## Repository Structure
 
 ```
-├── main.py                     # Entry point; scrape loop iterating dates from 2007-10-03 to today
-├── nhl_api.py                  # NHL Stats API client (schedule + live feed endpoints)
-├── database.py                 # SQLite operations for raw and normalized player schema
-├── docs/player_database_plan.md# Design doc driving player schema phases
-├── tests/test_database.py      # DB schema + data quality unit tests
-├── tests/test_nhl_api.py       # API parsing/error-path unit tests
-├── tests/conftest.py           # Pytest import path setup
-├── README.md                   # Project documentation
-└── requirements.txt            # Dependencies
+├── src/
+│   ├── main.py                     # Entry point; scrape loop iterating dates from 2007-10-03 to today
+│   ├── nhl_api.py                  # NHL Stats API client (schedule + live feed endpoints)
+│   └── database.py                 # SQLite operations for raw and normalized player schema
+├── tests/
+│   ├── conftest.py                 # Pytest import path setup (adds src/ to sys.path)
+│   ├── test_database.py            # DB schema + data quality unit tests
+│   └── test_nhl_api.py             # API parsing/error-path unit tests
+├── docs/
+│   └── player_database_plan.md     # Design doc driving player schema phases
+├── README.md                       # Project documentation
+└── requirements.txt                # Dependencies
 ```
 
 ## Architecture & Data Flow
