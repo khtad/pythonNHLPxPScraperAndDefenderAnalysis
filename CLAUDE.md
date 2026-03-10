@@ -89,3 +89,4 @@ player-schema bootstrap
 - Keep SQL identifiers validated and quoted when dynamic.
 - Prefer normalized schema additions over duplicating raw event rows.
 - Any new player feature should be derivable from `player_game_stats` and materialized into `player_game_features`.
+- **No magic numbers or strings**: Never use bare numeric or string literals inline. Always define a descriptively named constant (e.g., `_GAME_API_MIN_INTERVAL = 2`, `NHL_FIRST_GAME_DATE = datetime.date(2007, 10, 3)`) and reference that constant in code and tests.

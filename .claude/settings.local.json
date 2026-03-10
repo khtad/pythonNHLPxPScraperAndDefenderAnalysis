@@ -11,7 +11,8 @@
       "Read(//usr/bin/**)",
       "Read(//usr/local/bin/**)",
       "Bash(python3 -m pip install pytest 2>&1 | tail -3)",
-      "Bash(apt list:*)"
+      "Bash(apt list:*)",
+      "Bash(source /tmp/testvenv/bin/activate && python3 -m pytest tests/ -v 2>&1)"
     ]
   }
 }
