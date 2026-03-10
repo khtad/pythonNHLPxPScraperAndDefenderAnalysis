@@ -14,7 +14,7 @@ def _mock_response(status_code, payload):
 # --- get_game_ids_for_date tests (new NHL API: api-web.nhle.com) ---
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_game_ids_for_date_returns_ids_from_schedule_json(mock_get):
     mock_get.return_value = _mock_response(
         200,
@@ -35,14 +35,14 @@ def test_get_game_ids_for_date_returns_ids_from_schedule_json(mock_get):
     assert nhl_api.get_game_ids_for_date("2024-01-01") == [1, 2, 3]
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_game_ids_for_date_returns_empty_list_on_non_200(mock_get):
     mock_get.return_value = _mock_response(500, {})
 
     assert nhl_api.get_game_ids_for_date("2024-01-01") == []
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_game_ids_for_date_returns_empty_list_when_no_matching_date(mock_get):
     mock_get.return_value = _mock_response(
         200,
@@ -59,14 +59,14 @@ def test_get_game_ids_for_date_returns_empty_list_when_no_matching_date(mock_get
     assert nhl_api.get_game_ids_for_date("2024-01-01") == []
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_game_ids_for_date_returns_empty_list_when_gameweek_empty(mock_get):
     mock_get.return_value = _mock_response(200, {"gameWeek": []})
 
     assert nhl_api.get_game_ids_for_date("2024-01-01") == []
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_game_ids_for_date_accepts_date_object(mock_get):
     """main.py passes datetime.date objects; ensure str conversion works."""
     mock_get.return_value = _mock_response(
@@ -87,7 +87,7 @@ def test_get_game_ids_for_date_accepts_date_object(mock_get):
 # --- get_weekly_schedule tests ---
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_weekly_schedule_returns_all_dates_and_game_ids(mock_get):
     mock_get.return_value = _mock_response(
         200,
@@ -111,7 +111,7 @@ def test_get_weekly_schedule_returns_all_dates_and_game_ids(mock_get):
     assert next_date == "2024-01-08"
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_weekly_schedule_returns_next_start_date_for_pagination(mock_get):
     mock_get.return_value = _mock_response(
         200,
@@ -127,7 +127,7 @@ def test_get_weekly_schedule_returns_next_start_date_for_pagination(mock_get):
     assert next_date == "2024-03-08"
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_weekly_schedule_returns_none_next_date_when_missing(mock_get):
     """At the end of available data, nextStartDate may be absent."""
     mock_get.return_value = _mock_response(
@@ -144,7 +144,7 @@ def test_get_weekly_schedule_returns_none_next_date_when_missing(mock_get):
     assert schedule == {"2026-03-10": []}
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_weekly_schedule_returns_empty_on_non_200(mock_get):
     mock_get.return_value = _mock_response(500, {})
 
@@ -154,7 +154,7 @@ def test_get_weekly_schedule_returns_empty_on_non_200(mock_get):
     assert next_date is None
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_weekly_schedule_returns_empty_when_gameweek_missing(mock_get):
     mock_get.return_value = _mock_response(200, {})
 
@@ -164,7 +164,7 @@ def test_get_weekly_schedule_returns_empty_when_gameweek_missing(mock_get):
     assert next_date is None
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_weekly_schedule_accepts_date_object(mock_get):
     mock_get.return_value = _mock_response(
         200,
@@ -184,7 +184,7 @@ def test_get_weekly_schedule_accepts_date_object(mock_get):
     assert "2024-01-01" in called_url
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 def test_get_weekly_schedule_makes_single_api_call(mock_get):
     """A weekly fetch should make exactly one HTTP request."""
     mock_get.return_value = _mock_response(
@@ -212,7 +212,7 @@ def test_get_weekly_schedule_makes_single_api_call(mock_get):
 # --- get_play_by_play_data tests (new NHL API: api-web.nhle.com) ---
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 @patch("nhl_api.time.sleep")
 @patch("nhl_api.time.monotonic", side_effect=[1000, 1001])
 def test_get_play_by_play_data_returns_shaped_rows(monotonic_mock, sleep_mock, mock_get):
@@ -244,7 +244,7 @@ def test_get_play_by_play_data_returns_shaped_rows(monotonic_mock, sleep_mock, m
     sleep_mock.assert_not_called()
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 @patch("nhl_api.time.sleep")
 @patch("nhl_api.time.monotonic", side_effect=[1000, 1001])
 def test_get_play_by_play_data_returns_none_on_non_200(monotonic_mock, sleep_mock, mock_get):
@@ -254,7 +254,7 @@ def test_get_play_by_play_data_returns_none_on_non_200(monotonic_mock, sleep_moc
     assert nhl_api.get_play_by_play_data(2023020001) is None
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 @patch("nhl_api.time.sleep")
 @patch("nhl_api.time.monotonic", side_effect=[1000, 1001])
 def test_get_play_by_play_data_returns_empty_list_when_no_plays(monotonic_mock, sleep_mock, mock_get):
@@ -264,7 +264,7 @@ def test_get_play_by_play_data_returns_empty_list_when_no_plays(monotonic_mock, 
     assert nhl_api.get_play_by_play_data(2023020001) == []
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 @patch("nhl_api.time.sleep")
 @patch("nhl_api.time.monotonic", side_effect=[1000, 1001])
 def test_get_play_by_play_data_handles_missing_nested_keys(monotonic_mock, sleep_mock, mock_get):
@@ -295,7 +295,7 @@ def test_rate_limit_interval_is_two_seconds():
     assert nhl_api._GAME_API_MIN_INTERVAL == 2
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 @patch("nhl_api.time.sleep")
 @patch("nhl_api.time.monotonic", side_effect=[5, 10])
 def test_get_play_by_play_data_rate_limits_when_called_too_fast(monotonic_mock, sleep_mock, mock_get):
@@ -309,7 +309,7 @@ def test_get_play_by_play_data_rate_limits_when_called_too_fast(monotonic_mock, 
     assert wait_time == nhl_api._GAME_API_MIN_INTERVAL
 
 
-@patch("nhl_api.requests.get")
+@patch.object(nhl_api._session, "get")
 @patch("nhl_api.time.sleep")
 @patch("nhl_api.time.monotonic", side_effect=[100, 200])
 def test_get_play_by_play_data_skips_sleep_when_enough_time_elapsed(monotonic_mock, sleep_mock, mock_get):
