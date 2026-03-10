@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:api-web.nhle.com)",
+      "Bash(python -m pytest tests/test_nhl_api.py -q 2>&1)",
+      "Bash(python3 -m pytest tests/test_nhl_api.py -q 2>&1)",
+      "Bash(pip3 install:*)",
+      "Bash(python3 -c \"import pytest; print\\(pytest.__file__\\)\")",
+      "Read(//usr/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Bash(python3 -m pip install pytest 2>&1 | tail -3)",
+      "Bash(apt list:*)"
+    ]
+  }
+}
