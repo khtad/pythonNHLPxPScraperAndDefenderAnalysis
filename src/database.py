@@ -5,6 +5,18 @@ import sqlite3
 from datetime import date, datetime
 from sqlite3 import Error
 
+_GAME_TABLE_PREFIX = "game_"
+_VALID_POSITION_GROUPS = ("F", "D", "G")
+_FEATURE_SET_VERSION = "v1"
+
+_RAW_GAME_TABLE_COLUMNS = """\
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period INTEGER,
+    time TEXT,
+    event TEXT,
+    description TEXT,
+    UNIQUE(period, time, event, description)"""
+
 
 def _quote_identifier(name):
     """Return a safely double-quoted SQLite identifier.
@@ -17,38 +29,28 @@ def _quote_identifier(name):
     return f'"{name}"'
 
 
-def create_table(conn, table_name):
+def _game_table_name(game_id):
+    return f"{_GAME_TABLE_PREFIX}{game_id}"
+
+
+def create_table(conn, game_id):
     cursor = conn.cursor()
-
-    quoted = _quote_identifier(f"game_{table_name}")
-
-    create_table_query = f"""CREATE TABLE IF NOT EXISTS {quoted} (
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                period INTEGER,
-                                time TEXT,
-                                event TEXT,
-                                description TEXT,
-                                UNIQUE(period, time, event, description)
-                             );"""
-
-    cursor.execute(create_table_query)
+    quoted = _quote_identifier(_game_table_name(game_id))
+    cursor.execute(f"CREATE TABLE IF NOT EXISTS {quoted} ({_RAW_GAME_TABLE_COLUMNS});")
     conn.commit()
 
 
-def insert_data(conn, table_name, data_list):
+def insert_data(conn, game_id, data_list):
+    if not data_list:
+        return
     cursor = conn.cursor()
-
-    quoted = _quote_identifier(f"game_{table_name}")
-
-    for data in data_list:
-        columns = ', '.join(data.keys())
-        placeholders = ', '.join(['?' for _ in data.keys()])
-        values = tuple(data.values())
-
-        insert_query = f"INSERT OR IGNORE INTO {quoted} ({columns}) VALUES ({placeholders})"
-        cursor.execute(insert_query, values)
-
+    quoted = _quote_identifier(_game_table_name(game_id))
+    columns = ', '.join(data_list[0].keys())
+    placeholders = ', '.join(['?' for _ in data_list[0].keys()])
+    insert_query = f"INSERT OR IGNORE INTO {quoted} ({columns}) VALUES ({placeholders})"
+    cursor.executemany(insert_query, [tuple(d.values()) for d in data_list])
     conn.commit()
+
 
 def create_collection_log_table(conn):
     cursor = conn.cursor()
@@ -62,16 +64,13 @@ def create_collection_log_table(conn):
 
 
 def is_game_collected(conn, game_id):
-    cursor = conn.cursor()
-    table_name = f"game_{game_id}"
-    cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-        (table_name,)
-    )
-    if cursor.fetchone() is None:
+    table_name = _game_table_name(game_id)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT 1 FROM {_quote_identifier(table_name)} LIMIT 1")
+        return cursor.fetchone() is not None
+    except sqlite3.OperationalError:
         return False
-    cursor.execute(f"SELECT COUNT(*) FROM {_quote_identifier(table_name)}")
-    return cursor.fetchone()[0] > 0
 
 
 def mark_date_collected(conn, date_str, games_found, games_collected):
@@ -107,17 +106,11 @@ def is_date_range_collected(conn, start_date, end_date):
 def deduplicate_existing_tables(conn):
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'game_%'"
+        "SELECT name, sql FROM sqlite_master WHERE type='table' AND name LIKE ?",
+        (f"{_GAME_TABLE_PREFIX}%",)
     )
-    game_tables = [row[0] for row in cursor.fetchall()]
 
-    for table_name in game_tables:
-        # Check if the UNIQUE constraint already exists by inspecting the table SQL
-        cursor.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
-            (table_name,)
-        )
-        create_sql = cursor.fetchone()[0]
+    for table_name, create_sql in cursor.fetchall():
         if "UNIQUE(period, time, event, description)" in create_sql:
             continue
 
@@ -125,14 +118,7 @@ def deduplicate_existing_tables(conn):
         temp_name = f"{table_name}_dedup_tmp"
         quoted = _quote_identifier(table_name)
         quoted_temp = _quote_identifier(temp_name)
-        cursor.execute(f"""CREATE TABLE {quoted_temp} (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            period INTEGER,
-                            time TEXT,
-                            event TEXT,
-                            description TEXT,
-                            UNIQUE(period, time, event, description)
-                         )""")
+        cursor.execute(f"CREATE TABLE {quoted_temp} ({_RAW_GAME_TABLE_COLUMNS})")
         cursor.execute(
             f"INSERT OR IGNORE INTO {quoted_temp} (period, time, event, description) "
             f"SELECT period, time, event, description FROM {quoted}"
@@ -217,7 +203,7 @@ def create_player_game_stats_table(conn):
 def create_player_game_features_table(conn):
     cursor = conn.cursor()
     cursor.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS player_game_features (
             player_id INTEGER NOT NULL,
             game_id INTEGER NOT NULL,
@@ -227,7 +213,7 @@ def create_player_game_features_table(conn):
             toi_rank_pos_10g REAL,
             toi_rolling_mean_5g REAL,
             points_rolling_10g REAL,
-            feature_set_version TEXT DEFAULT 'v1',
+            feature_set_version TEXT DEFAULT '{_FEATURE_SET_VERSION}',
             PRIMARY KEY (player_id, game_id)
         )
         """
@@ -255,8 +241,10 @@ def validate_player_game_stats_quality(conn, max_toi_seconds=3600):
     cursor.execute("SELECT COUNT(*) FROM player_game_stats WHERE toi_seconds > ?", (max_toi_seconds,))
     toi_above_max_rows = cursor.fetchone()[0]
 
+    position_placeholders = ', '.join(['?' for _ in _VALID_POSITION_GROUPS])
     cursor.execute(
-        "SELECT COUNT(*) FROM player_game_stats WHERE position_group NOT IN ('F', 'D', 'G')"
+        f"SELECT COUNT(*) FROM player_game_stats WHERE position_group NOT IN ({position_placeholders})",
+        _VALID_POSITION_GROUPS
     )
     invalid_position_group_rows = cursor.fetchone()[0]
 
