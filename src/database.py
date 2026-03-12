@@ -9,6 +9,54 @@ _GAME_TABLE_PREFIX = "game_"
 _VALID_POSITION_GROUPS = ("F", "D", "G")
 _FEATURE_SET_VERSION = "v1"
 
+# ── xG Phase 0: schema versions ──────────────────────────────────────
+
+_XG_EVENT_SCHEMA_VERSION = "v1"
+_XG_FEATURE_SCHEMA_VERSION = "v1"
+
+# ── xG Phase 0: data-contract constants ──────────────────────────────
+
+VALID_SHOT_TYPES = (
+    "wrist",
+    "slap",
+    "snap",
+    "backhand",
+    "tip-in",
+    "wrap-around",
+    "deflection",
+    "bat",
+    "cradle",
+    "poke",
+)
+
+VALID_MANPOWER_STATES = (
+    "5v5",
+    "5v4",
+    "4v5",
+    "5v3",
+    "3v5",
+    "4v4",
+    "4v3",
+    "3v4",
+    "3v3",
+)
+
+VALID_SCORE_STATES = (
+    "tied",
+    "up1",
+    "up2",
+    "up3plus",
+    "down1",
+    "down2",
+    "down3plus",
+)
+
+# NHL rink normalized coordinate bounds (feet)
+NORMALIZED_X_COORD_MIN = -100.0
+NORMALIZED_X_COORD_MAX = 100.0
+NORMALIZED_Y_COORD_MIN = -42.5
+NORMALIZED_Y_COORD_MAX = 42.5
+
 _RAW_GAME_TABLE_COLUMNS = """\
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     period INTEGER,
@@ -260,6 +308,123 @@ def ensure_player_database_schema(conn):
     create_core_dimension_tables(conn)
     create_player_game_stats_table(conn)
     create_player_game_features_table(conn)
+
+
+# ── xG Phase 0: canonical shot events table ──────────────────────────
+
+def create_shot_events_table(conn):
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS shot_events (
+            shot_event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id INTEGER NOT NULL,
+            event_idx INTEGER NOT NULL,
+            period INTEGER NOT NULL,
+            time_in_period TEXT NOT NULL,
+            time_remaining_seconds INTEGER NOT NULL,
+            shot_type TEXT NOT NULL,
+            x_coord REAL,
+            y_coord REAL,
+            distance_to_goal REAL,
+            angle_to_goal REAL,
+            is_goal INTEGER NOT NULL DEFAULT 0,
+            shooting_team_id INTEGER NOT NULL,
+            goalie_id INTEGER,
+            shooter_id INTEGER,
+            score_state TEXT,
+            manpower_state TEXT,
+            event_schema_version TEXT NOT NULL DEFAULT '{_XG_EVENT_SCHEMA_VERSION}',
+            UNIQUE(game_id, event_idx)
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_shot_events_game_id "
+        "ON shot_events(game_id)"
+    )
+    conn.commit()
+
+
+def validate_shot_events_quality(conn):
+    cursor = conn.cursor()
+
+    shot_type_placeholders = ", ".join(["?"] * len(VALID_SHOT_TYPES))
+    cursor.execute(
+        f"SELECT COUNT(*) FROM shot_events "
+        f"WHERE shot_type NOT IN ({shot_type_placeholders})",
+        VALID_SHOT_TYPES,
+    )
+    invalid_shot_type_rows = cursor.fetchone()[0]
+
+    manpower_placeholders = ", ".join(["?"] * len(VALID_MANPOWER_STATES))
+    cursor.execute(
+        f"SELECT COUNT(*) FROM shot_events "
+        f"WHERE manpower_state IS NOT NULL "
+        f"AND manpower_state NOT IN ({manpower_placeholders})",
+        VALID_MANPOWER_STATES,
+    )
+    invalid_manpower_state_rows = cursor.fetchone()[0]
+
+    score_placeholders = ", ".join(["?"] * len(VALID_SCORE_STATES))
+    cursor.execute(
+        f"SELECT COUNT(*) FROM shot_events "
+        f"WHERE score_state IS NOT NULL "
+        f"AND score_state NOT IN ({score_placeholders})",
+        VALID_SCORE_STATES,
+    )
+    invalid_score_state_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        "SELECT COUNT(*) FROM shot_events "
+        "WHERE x_coord IS NOT NULL AND (x_coord < ? OR x_coord > ?)",
+        (NORMALIZED_X_COORD_MIN, NORMALIZED_X_COORD_MAX),
+    )
+    x_coord_out_of_range_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        "SELECT COUNT(*) FROM shot_events "
+        "WHERE y_coord IS NOT NULL AND (y_coord < ? OR y_coord > ?)",
+        (NORMALIZED_Y_COORD_MIN, NORMALIZED_Y_COORD_MAX),
+    )
+    y_coord_out_of_range_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        "SELECT COUNT(*) FROM shot_events WHERE is_goal NOT IN (0, 1)"
+    )
+    invalid_is_goal_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        "SELECT COUNT(*) FROM shot_events WHERE time_remaining_seconds < 0"
+    )
+    negative_time_remaining_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM (
+            SELECT game_id, event_idx, COUNT(*) AS row_count
+            FROM shot_events
+            GROUP BY game_id, event_idx
+            HAVING COUNT(*) > 1
+        )
+        """
+    )
+    duplicate_game_event_rows = cursor.fetchone()[0]
+
+    return {
+        "invalid_shot_type_rows": invalid_shot_type_rows,
+        "invalid_manpower_state_rows": invalid_manpower_state_rows,
+        "invalid_score_state_rows": invalid_score_state_rows,
+        "x_coord_out_of_range_rows": x_coord_out_of_range_rows,
+        "y_coord_out_of_range_rows": y_coord_out_of_range_rows,
+        "invalid_is_goal_rows": invalid_is_goal_rows,
+        "negative_time_remaining_rows": negative_time_remaining_rows,
+        "duplicate_game_event_rows": duplicate_game_event_rows,
+    }
+
+
+def ensure_xg_schema(conn):
+    create_shot_events_table(conn)
 
 
 def create_connection(database_file):
