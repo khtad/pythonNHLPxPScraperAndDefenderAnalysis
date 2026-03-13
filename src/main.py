@@ -4,6 +4,7 @@ from nhl_api import get_weekly_schedule, get_play_by_play_data
 from database import (create_table, insert_data, create_connection,
                       create_collection_log_table, is_game_collected,
                       mark_date_collected, get_last_collected_date,
+                      fix_incomplete_collection_log,
                       deduplicate_existing_tables)
 
 DATABASE_PATH = "nhl_data.db"
@@ -16,6 +17,7 @@ def main():
     # Connect to the database
     conn = create_connection(DATABASE_PATH)
     create_collection_log_table(conn)
+    fix_incomplete_collection_log(conn)
     deduplicate_existing_tables(conn)
 
     # Resume from the day after the last fully-collected date

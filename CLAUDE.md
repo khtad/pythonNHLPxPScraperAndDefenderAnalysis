@@ -63,6 +63,7 @@ player-schema bootstrap
 
 - Framework: `pytest` + in-memory SQLite + request mocks
 - The player-schema tests are written in phase style (Phase 2-5 from the design doc)
+- **How to run tests**: Use `python3 -m venv /tmp/test-venv && /tmp/test-venv/bin/pip install -q pytest requests && /tmp/test-venv/bin/python -m pytest -q` (or reuse the venv if it already exists: `/tmp/test-venv/bin/python -m pytest -q`). Do not call `pytest` directly — the system Python does not have pytest installed.
 
 ## Test Failures Encountered, Fixes, and Prevention Rules
 
@@ -98,3 +99,4 @@ player-schema bootstrap
 - **Single-query catalog scans**: When reading metadata from `sqlite_master`, fetch all needed columns (`name, sql`, etc.) in one query. Never query the catalog in a loop (N+1 pattern).
 - **Extract shared schema definitions**: If the same column list or DDL fragment appears in more than one SQL statement (e.g., `create_table` and a migration function), define it as a module-level constant and reference it everywhere.
 - **Name parameters after what callers pass**: If every caller passes a game ID, name the parameter `game_id`, not `table_name`. Internal prefixing (e.g., `game_`) should happen inside the function via a helper like `_game_table_name(game_id)`.
+- **Idempotent collection tracking**: `mark_date_collected` must only set `completed_at` when `games_collected >= games_found`. Incomplete dates (`completed_at IS NULL`) signal that the scraper should retry. `get_last_collected_date` must check for incomplete dates and return a resume point before the earliest incomplete date, ensuring no game data is permanently skipped.

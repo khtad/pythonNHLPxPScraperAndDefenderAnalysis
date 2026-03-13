@@ -2,7 +2,7 @@
 
 import re
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from sqlite3 import Error
 
 _GAME_TABLE_PREFIX = "game_"
@@ -123,16 +123,21 @@ def is_game_collected(conn, game_id):
 
 def mark_date_collected(conn, date_str, games_found, games_collected):
     cursor = conn.cursor()
+    completed_at = datetime.now().isoformat() if games_collected >= games_found else None
     cursor.execute(
         "INSERT OR REPLACE INTO collection_log (date, games_found, games_collected, completed_at) "
         "VALUES (?, ?, ?, ?)",
-        (date_str, games_found, games_collected, datetime.now().isoformat())
+        (date_str, games_found, games_collected, completed_at)
     )
     conn.commit()
 
 
 def get_last_collected_date(conn):
     cursor = conn.cursor()
+    cursor.execute("SELECT MIN(date) FROM collection_log WHERE completed_at IS NULL")
+    row = cursor.fetchone()
+    if row and row[0]:
+        return date.fromisoformat(row[0]) - timedelta(days=1)
     cursor.execute("SELECT MAX(date) FROM collection_log WHERE completed_at IS NOT NULL")
     row = cursor.fetchone()
     if row and row[0]:
@@ -149,6 +154,18 @@ def is_date_range_collected(conn, start_date, end_date):
         (start_date.isoformat(), end_date.isoformat())
     )
     return cursor.fetchone()[0] == total_days
+
+
+def fix_incomplete_collection_log(conn):
+    """One-time migration: clear completed_at on rows where not all games were collected."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE collection_log SET completed_at = NULL "
+        "WHERE games_collected < games_found AND completed_at IS NOT NULL"
+    )
+    if cursor.rowcount > 0:
+        print(f"Fixed {cursor.rowcount} incomplete collection_log entries")
+    conn.commit()
 
 
 def deduplicate_existing_tables(conn):
