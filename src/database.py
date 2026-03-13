@@ -66,13 +66,16 @@ _RAW_GAME_TABLE_COLUMNS = """\
     UNIQUE(period, time, event, description)"""
 
 
+_IDENTIFIER_RE = re.compile(r'^\w+$')
+
+
 def _quote_identifier(name):
     """Return a safely double-quoted SQLite identifier.
 
     Validates that the name contains only word characters (letters, digits,
     underscores) before quoting, preventing SQL injection via identifier names.
     """
-    if not re.match(r'^\w+$', name):
+    if not _IDENTIFIER_RE.match(name):
         raise ValueError(f"Invalid identifier: {name!r}")
     return f'"{name}"'
 
@@ -93,7 +96,7 @@ def insert_data(conn, game_id, data_list):
         return
     cursor = conn.cursor()
     quoted = _quote_identifier(_game_table_name(game_id))
-    columns = ', '.join(data_list[0].keys())
+    columns = ', '.join(_quote_identifier(k) for k in data_list[0].keys())
     placeholders = ', '.join(['?' for _ in data_list[0].keys()])
     insert_query = f"INSERT OR IGNORE INTO {quoted} ({columns}) VALUES ({placeholders})"
     cursor.executemany(insert_query, [tuple(d.values()) for d in data_list])
@@ -286,38 +289,73 @@ def create_player_game_features_table(conn):
     conn.commit()
 
 
+def _count_invalid_enum(cursor, table, column, valid_values, nullable=False):
+    """Count rows where column holds a value outside the valid set."""
+    quoted_table = _quote_identifier(table)
+    quoted_col = _quote_identifier(column)
+    placeholders = ", ".join(["?"] * len(valid_values))
+    null_guard = f"{quoted_col} IS NOT NULL AND " if nullable else ""
+    cursor.execute(
+        f"SELECT COUNT(*) FROM {quoted_table} "
+        f"WHERE {null_guard}{quoted_col} NOT IN ({placeholders})",
+        valid_values,
+    )
+    return cursor.fetchone()[0]
+
+
+def _count_duplicates(cursor, table, key_columns):
+    """Count rows with duplicate composite keys."""
+    quoted_table = _quote_identifier(table)
+    cols = ", ".join(_quote_identifier(c) for c in key_columns)
+    cursor.execute(
+        f"SELECT COUNT(*) FROM ("
+        f"SELECT {cols}, COUNT(*) AS n FROM {quoted_table} "
+        f"GROUP BY {cols} HAVING COUNT(*) > 1)"
+    )
+    return cursor.fetchone()[0]
+
+
+def _count_negative(cursor, table, column):
+    """Count rows where column < 0."""
+    cursor.execute(
+        f"SELECT COUNT(*) FROM {_quote_identifier(table)} "
+        f"WHERE {_quote_identifier(column)} < 0"
+    )
+    return cursor.fetchone()[0]
+
+
+def _count_above_max(cursor, table, column, max_val):
+    """Count rows where column > max_val."""
+    cursor.execute(
+        f"SELECT COUNT(*) FROM {_quote_identifier(table)} "
+        f"WHERE {_quote_identifier(column)} > ?",
+        (max_val,),
+    )
+    return cursor.fetchone()[0]
+
+
+def _count_out_of_range(cursor, table, column, min_val, max_val):
+    """Count rows where a nullable numeric column is outside [min, max]."""
+    quoted_col = _quote_identifier(column)
+    cursor.execute(
+        f"SELECT COUNT(*) FROM {_quote_identifier(table)} "
+        f"WHERE {quoted_col} IS NOT NULL AND ({quoted_col} < ? OR {quoted_col} > ?)",
+        (min_val, max_val),
+    )
+    return cursor.fetchone()[0]
+
+
 def validate_player_game_stats_quality(conn, max_toi_seconds=3600):
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT COUNT(*) FROM (
-            SELECT player_id, game_id, COUNT(*) AS row_count
-            FROM player_game_stats
-            GROUP BY player_id, game_id
-            HAVING COUNT(*) > 1
-        )
-        """
-    )
-    duplicate_player_game_rows = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM player_game_stats WHERE toi_seconds < 0")
-    negative_toi_rows = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM player_game_stats WHERE toi_seconds > ?", (max_toi_seconds,))
-    toi_above_max_rows = cursor.fetchone()[0]
-
-    position_placeholders = ', '.join(['?' for _ in _VALID_POSITION_GROUPS])
-    cursor.execute(
-        f"SELECT COUNT(*) FROM player_game_stats WHERE position_group NOT IN ({position_placeholders})",
-        _VALID_POSITION_GROUPS
-    )
-    invalid_position_group_rows = cursor.fetchone()[0]
-
     return {
-        "duplicate_player_game_rows": duplicate_player_game_rows,
-        "negative_toi_rows": negative_toi_rows,
-        "toi_above_max_rows": toi_above_max_rows,
-        "invalid_position_group_rows": invalid_position_group_rows,
+        "duplicate_player_game_rows": _count_duplicates(
+            cursor, "player_game_stats", ("player_id", "game_id")),
+        "negative_toi_rows": _count_negative(
+            cursor, "player_game_stats", "toi_seconds"),
+        "toi_above_max_rows": _count_above_max(
+            cursor, "player_game_stats", "toi_seconds", max_toi_seconds),
+        "invalid_position_group_rows": _count_invalid_enum(
+            cursor, "player_game_stats", "position_group", _VALID_POSITION_GROUPS),
     }
 
 
@@ -363,80 +401,29 @@ def create_shot_events_table(conn):
     conn.commit()
 
 
+_VALID_IS_GOAL_VALUES = (0, 1)
+
+
 def validate_shot_events_quality(conn):
     cursor = conn.cursor()
-
-    shot_type_placeholders = ", ".join(["?"] * len(VALID_SHOT_TYPES))
-    cursor.execute(
-        f"SELECT COUNT(*) FROM shot_events "
-        f"WHERE shot_type NOT IN ({shot_type_placeholders})",
-        VALID_SHOT_TYPES,
-    )
-    invalid_shot_type_rows = cursor.fetchone()[0]
-
-    manpower_placeholders = ", ".join(["?"] * len(VALID_MANPOWER_STATES))
-    cursor.execute(
-        f"SELECT COUNT(*) FROM shot_events "
-        f"WHERE manpower_state IS NOT NULL "
-        f"AND manpower_state NOT IN ({manpower_placeholders})",
-        VALID_MANPOWER_STATES,
-    )
-    invalid_manpower_state_rows = cursor.fetchone()[0]
-
-    score_placeholders = ", ".join(["?"] * len(VALID_SCORE_STATES))
-    cursor.execute(
-        f"SELECT COUNT(*) FROM shot_events "
-        f"WHERE score_state IS NOT NULL "
-        f"AND score_state NOT IN ({score_placeholders})",
-        VALID_SCORE_STATES,
-    )
-    invalid_score_state_rows = cursor.fetchone()[0]
-
-    cursor.execute(
-        "SELECT COUNT(*) FROM shot_events "
-        "WHERE x_coord IS NOT NULL AND (x_coord < ? OR x_coord > ?)",
-        (NORMALIZED_X_COORD_MIN, NORMALIZED_X_COORD_MAX),
-    )
-    x_coord_out_of_range_rows = cursor.fetchone()[0]
-
-    cursor.execute(
-        "SELECT COUNT(*) FROM shot_events "
-        "WHERE y_coord IS NOT NULL AND (y_coord < ? OR y_coord > ?)",
-        (NORMALIZED_Y_COORD_MIN, NORMALIZED_Y_COORD_MAX),
-    )
-    y_coord_out_of_range_rows = cursor.fetchone()[0]
-
-    cursor.execute(
-        "SELECT COUNT(*) FROM shot_events WHERE is_goal NOT IN (0, 1)"
-    )
-    invalid_is_goal_rows = cursor.fetchone()[0]
-
-    cursor.execute(
-        "SELECT COUNT(*) FROM shot_events WHERE time_remaining_seconds < 0"
-    )
-    negative_time_remaining_rows = cursor.fetchone()[0]
-
-    cursor.execute(
-        """
-        SELECT COUNT(*) FROM (
-            SELECT game_id, event_idx, COUNT(*) AS row_count
-            FROM shot_events
-            GROUP BY game_id, event_idx
-            HAVING COUNT(*) > 1
-        )
-        """
-    )
-    duplicate_game_event_rows = cursor.fetchone()[0]
-
+    _t = "shot_events"
     return {
-        "invalid_shot_type_rows": invalid_shot_type_rows,
-        "invalid_manpower_state_rows": invalid_manpower_state_rows,
-        "invalid_score_state_rows": invalid_score_state_rows,
-        "x_coord_out_of_range_rows": x_coord_out_of_range_rows,
-        "y_coord_out_of_range_rows": y_coord_out_of_range_rows,
-        "invalid_is_goal_rows": invalid_is_goal_rows,
-        "negative_time_remaining_rows": negative_time_remaining_rows,
-        "duplicate_game_event_rows": duplicate_game_event_rows,
+        "invalid_shot_type_rows": _count_invalid_enum(
+            cursor, _t, "shot_type", VALID_SHOT_TYPES),
+        "invalid_manpower_state_rows": _count_invalid_enum(
+            cursor, _t, "manpower_state", VALID_MANPOWER_STATES, nullable=True),
+        "invalid_score_state_rows": _count_invalid_enum(
+            cursor, _t, "score_state", VALID_SCORE_STATES, nullable=True),
+        "x_coord_out_of_range_rows": _count_out_of_range(
+            cursor, _t, "x_coord", NORMALIZED_X_COORD_MIN, NORMALIZED_X_COORD_MAX),
+        "y_coord_out_of_range_rows": _count_out_of_range(
+            cursor, _t, "y_coord", NORMALIZED_Y_COORD_MIN, NORMALIZED_Y_COORD_MAX),
+        "invalid_is_goal_rows": _count_invalid_enum(
+            cursor, _t, "is_goal", _VALID_IS_GOAL_VALUES),
+        "negative_time_remaining_rows": _count_negative(
+            cursor, _t, "time_remaining_seconds"),
+        "duplicate_game_event_rows": _count_duplicates(
+            cursor, _t, ("game_id", "event_idx")),
     }
 
 
