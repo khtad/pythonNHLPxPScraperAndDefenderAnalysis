@@ -12,6 +12,7 @@ from database import (
     create_table,
     ensure_player_database_schema,
     deduplicate_existing_tables,
+    fix_incomplete_collection_log,
     get_last_collected_date,
     insert_data,
     is_date_range_collected,
@@ -325,3 +326,77 @@ def test_ensure_player_database_schema_is_idempotent(conn):
         "SELECT name FROM sqlite_master WHERE type='table' AND name='player_game_features'"
     )
     assert cur.fetchone() is not None
+
+
+def test_mark_date_collected_sets_null_completed_at_when_incomplete(conn):
+    create_collection_log_table(conn)
+    mark_date_collected(conn, "2024-02-01", 5, 3)
+
+    cur = conn.cursor()
+    cur.execute("SELECT completed_at FROM collection_log WHERE date='2024-02-01'")
+    assert cur.fetchone()[0] is None
+
+
+def test_mark_date_collected_sets_completed_at_when_all_games_collected(conn):
+    create_collection_log_table(conn)
+    mark_date_collected(conn, "2024-02-01", 5, 5)
+
+    cur = conn.cursor()
+    cur.execute("SELECT completed_at FROM collection_log WHERE date='2024-02-01'")
+    assert cur.fetchone()[0] is not None
+
+
+def test_get_last_collected_date_returns_day_before_earliest_incomplete(conn):
+    create_collection_log_table(conn)
+    mark_date_collected(conn, "2024-01-01", 2, 2)  # complete
+    mark_date_collected(conn, "2024-01-02", 3, 1)  # incomplete
+    mark_date_collected(conn, "2024-01-03", 2, 2)  # complete
+
+    assert get_last_collected_date(conn) == date(2024, 1, 1)
+
+
+def test_get_last_collected_date_falls_back_when_no_incomplete(conn):
+    create_collection_log_table(conn)
+    mark_date_collected(conn, "2024-01-01", 2, 2)
+    mark_date_collected(conn, "2024-01-02", 3, 3)
+
+    assert get_last_collected_date(conn) == date(2024, 1, 2)
+
+
+def test_mark_date_collected_incomplete_then_complete_sets_completed_at(conn):
+    create_collection_log_table(conn)
+    mark_date_collected(conn, "2024-02-01", 5, 3)
+
+    cur = conn.cursor()
+    cur.execute("SELECT completed_at FROM collection_log WHERE date='2024-02-01'")
+    assert cur.fetchone()[0] is None
+
+    mark_date_collected(conn, "2024-02-01", 5, 5)
+    cur.execute("SELECT completed_at FROM collection_log WHERE date='2024-02-01'")
+    assert cur.fetchone()[0] is not None
+
+
+def test_fix_incomplete_collection_log_clears_bad_completed_at(conn):
+    create_collection_log_table(conn)
+    cur = conn.cursor()
+    # Simulate old buggy data: incomplete date with completed_at set
+    cur.execute(
+        "INSERT INTO collection_log (date, games_found, games_collected, completed_at) "
+        "VALUES (?, ?, ?, ?)",
+        ("2024-03-01", 5, 3, "2024-03-01T12:00:00"),
+    )
+    # Complete date should be left alone
+    cur.execute(
+        "INSERT INTO collection_log (date, games_found, games_collected, completed_at) "
+        "VALUES (?, ?, ?, ?)",
+        ("2024-03-02", 4, 4, "2024-03-02T12:00:00"),
+    )
+    conn.commit()
+
+    fix_incomplete_collection_log(conn)
+
+    cur.execute("SELECT completed_at FROM collection_log WHERE date='2024-03-01'")
+    assert cur.fetchone()[0] is None
+
+    cur.execute("SELECT completed_at FROM collection_log WHERE date='2024-03-02'")
+    assert cur.fetchone()[0] is not None

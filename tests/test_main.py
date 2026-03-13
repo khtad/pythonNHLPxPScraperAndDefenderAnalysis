@@ -176,3 +176,33 @@ def test_main_resumes_from_last_collected_date(
 
     called_date = mock_weekly.call_args[0][0]
     assert str(called_date) == "2007-10-04"
+
+
+@patch("main.get_play_by_play_data")
+@patch("main.get_weekly_schedule")
+@patch("main.deduplicate_existing_tables")
+@patch("main.create_connection")
+def test_main_resumes_from_incomplete_date(
+    mock_conn, mock_dedup, mock_weekly, mock_pbp,
+):
+    """When an incomplete date exists, main() should resume from that date."""
+    conn = _in_memory_conn()
+    mark_date_collected(conn, "2007-10-03", 2, 2)  # complete
+    mark_date_collected(conn, "2007-10-04", 2, 1)  # incomplete
+    mark_date_collected(conn, "2007-10-05", 1, 1)  # complete
+    mock_conn.return_value = conn
+
+    mock_weekly.return_value = (
+        {
+            "2007-10-04": [20, 21],
+            "2007-10-05": [22],
+        },
+        None,
+    )
+    mock_pbp.return_value = [{"period": 1, "time": "00:00", "event": "x", "description": "x"}]
+
+    with patch("main.datetime", _patch_datetime(datetime.date(2007, 10, 6))):
+        main.main()
+
+    called_date = mock_weekly.call_args[0][0]
+    assert str(called_date) == "2007-10-04"
