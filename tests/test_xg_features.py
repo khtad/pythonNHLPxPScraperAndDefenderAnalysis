@@ -9,6 +9,10 @@ from xg_features import (
     GOAL_Y_COORD,
     _REGULATION_PERIOD_LENGTH_SECONDS,
     _SITUATION_CODE_LENGTH,
+    _FACEOFF_RECENCY_BINS,
+    _FACEOFF_RECENCY_STEADY_STATE,
+    _POST_FACEOFF_WINDOW_SECONDS,
+    _EARTH_RADIUS_KM,
     parse_time_remaining,
     parse_situation_code,
     classify_manpower_state,
@@ -18,6 +22,14 @@ from xg_features import (
     compute_angle_to_goal,
     extract_shot_events,
     _track_score,
+    classify_faceoff_recency,
+    faceoff_zone_recency_interaction,
+    is_post_faceoff_window,
+    extract_game_metadata,
+    compute_rest_days,
+    is_back_to_back,
+    haversine_distance,
+    compute_timezone_delta,
 )
 
 
@@ -592,3 +604,235 @@ def test_extract_shot_events_skips_non_shot_events():
     }
 
     assert extract_shot_events(game_data) == []
+
+
+# ── Phase 2, Area 3: faceoff recency constants ──────────────────────
+
+
+def test_faceoff_recency_bins_is_tuple():
+    assert isinstance(_FACEOFF_RECENCY_BINS, tuple)
+    assert len(_FACEOFF_RECENCY_BINS) > 0
+
+
+def test_faceoff_recency_steady_state_label():
+    assert _FACEOFF_RECENCY_STEADY_STATE == "steady_state"
+
+
+def test_post_faceoff_window_seconds_is_positive():
+    assert _POST_FACEOFF_WINDOW_SECONDS > 0
+
+
+def test_earth_radius_km():
+    assert abs(_EARTH_RADIUS_KM - 6371.0) < 1.0
+
+
+# ── Phase 2, Area 3: classify_faceoff_recency ───────────────────────
+
+
+def test_classify_faceoff_recency_immediate():
+    assert classify_faceoff_recency(0) == "immediate"
+    assert classify_faceoff_recency(3) == "immediate"
+    assert classify_faceoff_recency(5) == "immediate"
+
+
+def test_classify_faceoff_recency_early():
+    assert classify_faceoff_recency(6) == "early"
+    assert classify_faceoff_recency(10) == "early"
+    assert classify_faceoff_recency(15) == "early"
+
+
+def test_classify_faceoff_recency_mid():
+    assert classify_faceoff_recency(16) == "mid"
+    assert classify_faceoff_recency(25) == "mid"
+    assert classify_faceoff_recency(30) == "mid"
+
+
+def test_classify_faceoff_recency_late():
+    assert classify_faceoff_recency(31) == "late"
+    assert classify_faceoff_recency(45) == "late"
+    assert classify_faceoff_recency(60) == "late"
+
+
+def test_classify_faceoff_recency_steady_state():
+    assert classify_faceoff_recency(61) == "steady_state"
+    assert classify_faceoff_recency(120) == "steady_state"
+    assert classify_faceoff_recency(999) == "steady_state"
+
+
+def test_classify_faceoff_recency_none():
+    assert classify_faceoff_recency(None) is None
+
+
+def test_classify_faceoff_recency_negative():
+    assert classify_faceoff_recency(-1) is None
+    assert classify_faceoff_recency(-100) is None
+
+
+# ── Phase 2, Area 3: faceoff_zone_recency_interaction ────────────────
+
+
+def test_faceoff_zone_recency_interaction_normal():
+    assert faceoff_zone_recency_interaction("O", "immediate") == "O_immediate"
+    assert faceoff_zone_recency_interaction("D", "late") == "D_late"
+    assert faceoff_zone_recency_interaction("N", "steady_state") == "N_steady_state"
+
+
+def test_faceoff_zone_recency_interaction_none_zone():
+    assert faceoff_zone_recency_interaction(None, "immediate") is None
+
+
+def test_faceoff_zone_recency_interaction_none_recency():
+    assert faceoff_zone_recency_interaction("O", None) is None
+
+
+def test_faceoff_zone_recency_interaction_both_none():
+    assert faceoff_zone_recency_interaction(None, None) is None
+
+
+# ── Phase 2, Area 3: is_post_faceoff_window ─────────────────────────
+
+
+def test_is_post_faceoff_window_within():
+    assert is_post_faceoff_window(0) == 1
+    assert is_post_faceoff_window(5) == 1
+    assert is_post_faceoff_window(10) == 1
+
+
+def test_is_post_faceoff_window_outside():
+    assert is_post_faceoff_window(11) == 0
+    assert is_post_faceoff_window(60) == 0
+
+
+def test_is_post_faceoff_window_custom_window():
+    assert is_post_faceoff_window(15, window_seconds=20) == 1
+    assert is_post_faceoff_window(25, window_seconds=20) == 0
+
+
+def test_is_post_faceoff_window_none():
+    assert is_post_faceoff_window(None) is None
+
+
+def test_is_post_faceoff_window_negative():
+    assert is_post_faceoff_window(-1) is None
+
+
+# ── Phase 2: extract_game_metadata ──────────────────────────────────
+
+
+def test_extract_game_metadata_full():
+    game_data = {
+        "id": 2024020001,
+        "gameDate": "2024-10-08",
+        "season": 20242025,
+        "homeTeam": {
+            "id": 10,
+            "abbrev": "TOR",
+            "placeName": {"default": "Toronto"},
+        },
+        "awayTeam": {
+            "id": 8,
+            "abbrev": "MTL",
+            "placeName": {"default": "Montréal"},
+        },
+        "venue": {"default": "Scotiabank Arena"},
+        "venueLocation": {"default": "Toronto, ON"},
+        "venueUTCOffset": "-05:00",
+        "plays": [],
+    }
+    meta = extract_game_metadata(game_data)
+    assert meta["game_id"] == 2024020001
+    assert meta["game_date"] == "2024-10-08"
+    assert meta["season"] == 20242025
+    assert meta["home_team_id"] == 10
+    assert meta["home_team_abbrev"] == "TOR"
+    assert meta["home_team_name"] == "Toronto"
+    assert meta["away_team_id"] == 8
+    assert meta["away_team_abbrev"] == "MTL"
+    assert meta["away_team_name"] == "Montréal"
+    assert meta["venue_name"] == "Scotiabank Arena"
+    assert meta["venue_city"] == "Toronto, ON"
+    assert meta["venue_utc_offset"] == "-05:00"
+
+
+def test_extract_game_metadata_missing_id():
+    assert extract_game_metadata({"homeTeam": {}, "awayTeam": {}}) is None
+
+
+def test_extract_game_metadata_minimal():
+    meta = extract_game_metadata({"id": 1})
+    assert meta["game_id"] == 1
+    assert meta["game_date"] is None
+    assert meta["venue_name"] is None
+
+
+# ── Phase 2, Area 1: compute_rest_days ──────────────────────────────
+
+
+def test_compute_rest_days_normal():
+    assert compute_rest_days("2024-10-10", "2024-10-08") == 2
+
+
+def test_compute_rest_days_back_to_back():
+    assert compute_rest_days("2024-10-09", "2024-10-08") == 1
+
+
+def test_compute_rest_days_none_inputs():
+    assert compute_rest_days(None, "2024-10-08") is None
+    assert compute_rest_days("2024-10-10", None) is None
+
+
+# ── Phase 2, Area 1: is_back_to_back ────────────────────────────────
+
+
+def test_is_back_to_back_true():
+    assert is_back_to_back(1) == 1
+
+
+def test_is_back_to_back_false():
+    assert is_back_to_back(2) == 0
+    assert is_back_to_back(0) == 0
+
+
+def test_is_back_to_back_none():
+    assert is_back_to_back(None) is None
+
+
+# ── Phase 2, Area 1: haversine_distance ─────────────────────────────
+
+
+def test_haversine_distance_same_point():
+    assert haversine_distance(40.0, -74.0, 40.0, -74.0) == 0.0
+
+
+def test_haversine_distance_known_cities():
+    # New York to Los Angeles: ~3944 km
+    dist = haversine_distance(40.7128, -74.0060, 34.0522, -118.2437)
+    assert 3900 < dist < 4000
+
+
+def test_haversine_distance_short():
+    # Toronto to Montreal: ~504 km
+    dist = haversine_distance(43.6532, -79.3832, 45.5017, -73.5673)
+    assert 480 < dist < 520
+
+
+# ── Phase 2, Area 1: compute_timezone_delta ─────────────────────────
+
+
+def test_compute_timezone_delta_same():
+    assert compute_timezone_delta(-5, -5) == 0
+
+
+def test_compute_timezone_delta_east_to_west():
+    # Away team at -5 (EST) traveling to -8 (PST)
+    assert compute_timezone_delta(-5, -8) == -3
+
+
+def test_compute_timezone_delta_west_to_east():
+    # Away team at -8 (PST) traveling to -5 (EST)
+    assert compute_timezone_delta(-8, -5) == 3
+
+
+def test_compute_timezone_delta_none():
+    assert compute_timezone_delta(None, -5) is None
+    assert compute_timezone_delta(-5, None) is None
