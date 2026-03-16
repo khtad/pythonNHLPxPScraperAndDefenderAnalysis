@@ -76,6 +76,7 @@ player-schema bootstrap
 - Framework: `pytest` + in-memory SQLite + request mocks
 - The player-schema tests are written in phase style (Phase 2-5 from the design doc)
 - **How to run tests**: Use `python3 -m venv /tmp/test-venv && /tmp/test-venv/bin/pip install -q pytest requests && /tmp/test-venv/bin/python -m pytest -q` (or reuse the venv if it already exists: `/tmp/test-venv/bin/python -m pytest -q`). Do not call `pytest` directly — the system Python does not have pytest installed.
+- **Notebook dependencies**: When creating or modifying Jupyter notebooks, automatically install any required packages (e.g., `matplotlib`, `seaborn`, `numpy`, `ipykernel`) into the project virtual environment at `/tmp/test-venv` using `/tmp/test-venv/bin/pip install`. Do not assume packages are already installed — always install before first use.
 
 ## Test Failures Encountered, Fixes, and Prevention Rules
 
@@ -91,6 +92,16 @@ player-schema bootstrap
      - Add tests first for new behavior, then immediately implement all imported function stubs before running the full suite.
      - Run `pytest -q` after adding new imports to detect collection-time errors early.
      - Keep phase-based function names stable between tests and implementation to avoid naming drift.
+
+2. **Failure:** Notebook analyses pointed at the correct `nhl_data.db`, but analysis tables were empty because the database contained only raw `game_<id>` tables and the scraper skipped those games before backfilling metadata and `shot_events`.
+   - **Cause:** The scraper treated `is_game_collected(conn, game_id)` as equivalent to "fully processed", even though derived tables (`games`, `shot_events`, `game_context`, etc.) were still missing. A related catalog-scan bug also matched the `games` dimension table with `LIKE 'game_%'`.
+   - **Fix:** Added a shared game-processing state check so a game is only skipped when raw rows, metadata, and derived shot rows all exist; added an explicit idempotent backfill entry point; restricted raw-table scans to names matching `game_<digits>` only.
+   - **Rules to avoid repeat failures of this type:**
+     - Treat raw ingestion and derived-data population as separate completeness checks. A game is not "done" unless raw rows and all required derived rows for the current pipeline stage exist.
+     - Any scraper change that adds a new derived table or feature extraction step must also add or update a backfill path for existing databases. Never assume historical databases can be repaired from future incremental runs alone.
+     - Backfill code must be idempotent by construction and by test: rerunning it against an already repaired database must perform no additional inserts and should avoid repeat API fetches for complete games.
+     - When scanning `sqlite_master` for raw game tables, never rely on `LIKE 'game_%'` alone. Always filter to the stricter pattern `game_<digits>` so dimension tables such as `games` are never misclassified as raw event tables.
+     - Notebook analysis instructions must not treat the presence of a large database file or raw game tables as evidence that analysis tables are populated. Include an explicit refresh/backfill step or note whenever notebooks depend on derived tables.
 
 ## Pre-Submission Checklist
 
@@ -112,3 +123,13 @@ player-schema bootstrap
 - **Extract shared schema definitions**: If the same column list or DDL fragment appears in more than one SQL statement (e.g., `create_table` and a migration function), define it as a module-level constant and reference it everywhere.
 - **Name parameters after what callers pass**: If every caller passes a game ID, name the parameter `game_id`, not `table_name`. Internal prefixing (e.g., `game_`) should happen inside the function via a helper like `_game_table_name(game_id)`.
 - **Idempotent collection tracking**: `mark_date_collected` must only set `completed_at` when `games_collected >= games_found`. Incomplete dates (`completed_at IS NULL`) signal that the scraper should retry. `get_last_collected_date` must check for incomplete dates and return a resume point before the earliest incomplete date, ensuring no game data is permanently skipped.
+- **Notebook path setup**: In Jupyter notebooks, never use `os.path.abspath("__file__")` — `"__file__"` is a string literal, not the `__file__` variable, and notebooks don't have `__file__` anyway. Instead, use CWD-based detection to find `src/`:
+  ```python
+  for _candidate in [os.path.join(os.getcwd(), "src"),
+                     os.path.join(os.getcwd(), "..", "src")]:
+      _candidate = os.path.abspath(_candidate)
+      if os.path.isdir(_candidate) and _candidate not in sys.path:
+          sys.path.insert(0, _candidate)
+          break
+  ```
+  This handles both CWD=project root (VS Code default) and CWD=notebooks/.
