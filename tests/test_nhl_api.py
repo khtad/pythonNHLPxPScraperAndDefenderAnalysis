@@ -319,3 +319,57 @@ def test_get_play_by_play_data_skips_sleep_when_enough_time_elapsed(monotonic_mo
     nhl_api.get_play_by_play_data(2023020001)
 
     sleep_mock.assert_not_called()
+
+
+# --- get_full_play_by_play tests ---
+
+
+@patch.object(nhl_api._session, "get")
+@patch("nhl_api.time.sleep")
+@patch("nhl_api.time.monotonic", side_effect=[1000, 1001])
+def test_get_full_play_by_play_returns_full_json(monotonic_mock, sleep_mock, mock_get):
+    nhl_api._last_game_api_call = 0
+    payload = {"plays": [{"eventId": 1}], "homeTeam": {"id": 10}}
+    mock_get.return_value = _mock_response(200, payload)
+
+    result = nhl_api.get_full_play_by_play(2023020001)
+    assert result == payload
+
+
+@patch.object(nhl_api._session, "get")
+@patch("nhl_api.time.sleep")
+@patch("nhl_api.time.monotonic", side_effect=[1000, 1001])
+def test_get_full_play_by_play_returns_none_on_non_200(monotonic_mock, sleep_mock, mock_get):
+    nhl_api._last_game_api_call = 0
+    mock_get.return_value = _mock_response(404, {})
+
+    assert nhl_api.get_full_play_by_play(2023020001) is None
+
+
+@patch.object(nhl_api._session, "get")
+@patch("nhl_api.time.sleep")
+@patch("nhl_api.time.monotonic", side_effect=[5, 10])
+def test_get_full_play_by_play_rate_limits(monotonic_mock, sleep_mock, mock_get):
+    nhl_api._last_game_api_call = 5
+    mock_get.return_value = _mock_response(200, {"plays": []})
+
+    nhl_api.get_full_play_by_play(2023020001)
+
+    sleep_mock.assert_called_once()
+
+
+@patch.object(nhl_api._session, "get")
+@patch("nhl_api.time.sleep")
+@patch("nhl_api.time.monotonic", side_effect=[1000, 1001])
+def test_get_play_by_play_data_delegates_to_full(monotonic_mock, sleep_mock, mock_get):
+    """get_play_by_play_data makes exactly one HTTP call via delegation."""
+    nhl_api._last_game_api_call = 0
+    mock_get.return_value = _mock_response(200, {
+        "plays": [
+            {"periodDescriptor": {"number": 1}, "timeInPeriod": "10:00", "typeDescKey": "shot-on-goal"},
+        ]
+    })
+
+    data = nhl_api.get_play_by_play_data(2023020001)
+    assert data == [{"period": 1, "time": "10:00", "event": "shot-on-goal", "description": "shot-on-goal"}]
+    assert mock_get.call_count == 1
