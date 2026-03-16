@@ -7,6 +7,8 @@ NHL Play-by-Play (PXP) scraper with a normalized player analytics schema. Raw ev
 ## Repository Structure
 
 ```
+├── data/                           # Database storage directory (created at runtime)
+│   └── nhl_data.db                 # SQLite database (not checked in)
 ├── src/
 │   ├── main.py                     # Entry point; scrape loop iterating dates from 2007-10-03 to today
 │   ├── nhl_api.py                  # NHL Stats API client (schedule + live feed endpoints)
@@ -20,6 +22,16 @@ NHL Play-by-Play (PXP) scraper with a normalized player analytics schema. Raw ev
 ├── README.md                       # Project documentation
 └── requirements.txt                # Dependencies
 ```
+
+## Database Path Constants
+
+Defined in `database.py` and imported by `main.py`:
+
+- `DATABASE_DIR` — absolute path to the `data/` directory at project root
+- `DATABASE_FILENAME` — `"nhl_data.db"`
+- `DATABASE_PATH` — full absolute path: `data/nhl_data.db`
+
+`main.main()` ensures `DATABASE_DIR` exists via `os.makedirs` before connecting.
 
 ## Architecture & Data Flow
 

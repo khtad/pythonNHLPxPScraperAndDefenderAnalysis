@@ -53,7 +53,8 @@ def get_weekly_schedule(date):
     return schedule, next_start_date
 
 
-def get_play_by_play_data(game_id):
+def _rate_limited_game_api_get(game_id):
+    """Rate-limited GET for a game play-by-play endpoint. Returns parsed JSON or None."""
     global _last_game_api_call
     elapsed = time.monotonic() - _last_game_api_call
     if elapsed < _GAME_API_MIN_INTERVAL:
@@ -64,6 +65,16 @@ def get_play_by_play_data(game_id):
     url = f"{_NHL_API_BASE_URL}/gamecenter/{game_id}/play-by-play"
     data = _api_get(url)
     _last_game_api_call = time.monotonic()
+    return data
+
+
+def get_full_play_by_play(game_id):
+    """Fetch complete play-by-play JSON for a game, or None on failure."""
+    return _rate_limited_game_api_get(game_id)
+
+
+def get_play_by_play_data(game_id):
+    data = get_full_play_by_play(game_id)
 
     if data is None:
         return None

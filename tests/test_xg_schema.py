@@ -15,6 +15,9 @@ from database import (
     create_shot_events_table,
     validate_shot_events_quality,
     ensure_xg_schema,
+    insert_shot_events,
+    game_has_shot_events,
+    _migrate_shot_events_v1_to_v2,
 )
 
 
@@ -303,3 +306,179 @@ def test_ensure_xg_schema_is_idempotent(conn):
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='shot_events'"
     )
     assert cur.fetchone()[0] == 1
+
+
+# ── Phase 1: new columns ──────────────────────────────────────────────
+
+
+def test_shot_events_table_has_faceoff_columns(conn):
+    create_shot_events_table(conn)
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(shot_events)")
+    cols = {row[1] for row in cur.fetchall()}
+    assert "seconds_since_faceoff" in cols
+    assert "faceoff_zone_code" in cols
+
+
+def test_valid_manpower_states_contains_pulled_goalie_states():
+    required = {"6v5", "5v6", "6v4", "4v6", "6v3", "3v6"}
+    assert required.issubset(set(VALID_MANPOWER_STATES))
+
+
+def test_xg_event_schema_version_is_v2():
+    assert _XG_EVENT_SCHEMA_VERSION == "v2"
+
+
+# ── Phase 1: migration ────────────────────────────────────────────────
+
+
+def test_migrate_shot_events_v1_to_v2_adds_columns(conn):
+    """Migration adds new columns to a v1 table that lacks them."""
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE shot_events (
+            shot_event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id INTEGER NOT NULL,
+            event_idx INTEGER NOT NULL,
+            period INTEGER NOT NULL,
+            time_in_period TEXT NOT NULL,
+            time_remaining_seconds INTEGER NOT NULL,
+            shot_type TEXT NOT NULL,
+            x_coord REAL,
+            y_coord REAL,
+            distance_to_goal REAL,
+            angle_to_goal REAL,
+            is_goal INTEGER NOT NULL DEFAULT 0,
+            shooting_team_id INTEGER NOT NULL,
+            goalie_id INTEGER,
+            shooter_id INTEGER,
+            score_state TEXT,
+            manpower_state TEXT,
+            event_schema_version TEXT NOT NULL DEFAULT 'v1',
+            UNIQUE(game_id, event_idx)
+        )
+    """)
+    conn.commit()
+
+    _migrate_shot_events_v1_to_v2(conn)
+
+    cur.execute("PRAGMA table_info(shot_events)")
+    cols = {row[1] for row in cur.fetchall()}
+    assert "seconds_since_faceoff" in cols
+    assert "faceoff_zone_code" in cols
+
+
+def test_migrate_shot_events_v1_to_v2_is_idempotent(conn):
+    """Running migration twice does not raise."""
+    create_shot_events_table(conn)
+    _migrate_shot_events_v1_to_v2(conn)
+    _migrate_shot_events_v1_to_v2(conn)
+
+
+# ── Phase 1: insert_shot_events ───────────────────────────────────────
+
+
+def test_insert_shot_events_inserts_rows(conn):
+    ensure_xg_schema(conn)
+    events = [
+        {
+            "game_id": 2023020001,
+            "event_idx": 1,
+            "period": 1,
+            "time_in_period": "10:00",
+            "time_remaining_seconds": 600,
+            "shot_type": "wrist",
+            "x_coord": 70.0,
+            "y_coord": 10.0,
+            "distance_to_goal": 30.0,
+            "angle_to_goal": 18.4,
+            "is_goal": 0,
+            "shooting_team_id": 10,
+            "goalie_id": 8471111,
+            "shooter_id": 8478402,
+            "score_state": "tied",
+            "manpower_state": "5v5",
+            "seconds_since_faceoff": 30,
+            "faceoff_zone_code": "N",
+        },
+    ]
+    insert_shot_events(conn, events)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM shot_events")
+    assert cur.fetchone()[0] == 1
+
+
+def test_insert_shot_events_auto_populates_schema_version(conn):
+    ensure_xg_schema(conn)
+    events = [
+        {
+            "game_id": 2023020001,
+            "event_idx": 1,
+            "period": 1,
+            "time_in_period": "10:00",
+            "time_remaining_seconds": 600,
+            "shot_type": "wrist",
+            "is_goal": 0,
+            "shooting_team_id": 10,
+        },
+    ]
+    insert_shot_events(conn, events)
+    cur = conn.cursor()
+    cur.execute("SELECT event_schema_version FROM shot_events")
+    assert cur.fetchone()[0] == _XG_EVENT_SCHEMA_VERSION
+
+
+def test_insert_shot_events_rejects_invalid_keys(conn):
+    ensure_xg_schema(conn)
+    events = [{"game_id": 1, "bad_key": "value"}]
+    with pytest.raises(ValueError, match="Invalid shot event keys"):
+        insert_shot_events(conn, events)
+
+
+def test_insert_shot_events_ignores_duplicates(conn):
+    ensure_xg_schema(conn)
+    event = {
+        "game_id": 2023020001,
+        "event_idx": 1,
+        "period": 1,
+        "time_in_period": "10:00",
+        "time_remaining_seconds": 600,
+        "shot_type": "wrist",
+        "is_goal": 0,
+        "shooting_team_id": 10,
+    }
+    insert_shot_events(conn, [event])
+    insert_shot_events(conn, [event])
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM shot_events")
+    assert cur.fetchone()[0] == 1
+
+
+def test_insert_shot_events_empty_list(conn):
+    ensure_xg_schema(conn)
+    insert_shot_events(conn, [])  # should not raise
+
+
+# ── Phase 1: game_has_shot_events ─────────────────────────────────────
+
+
+def test_game_has_shot_events_false_when_empty(conn):
+    ensure_xg_schema(conn)
+    assert game_has_shot_events(conn, 2023020001) is False
+
+
+def test_game_has_shot_events_true_when_present(conn):
+    ensure_xg_schema(conn)
+    event = {
+        "game_id": 2023020001,
+        "event_idx": 1,
+        "period": 1,
+        "time_in_period": "10:00",
+        "time_remaining_seconds": 600,
+        "shot_type": "wrist",
+        "is_goal": 0,
+        "shooting_team_id": 10,
+    }
+    insert_shot_events(conn, [event])
+    assert game_has_shot_events(conn, 2023020001) is True
+    assert game_has_shot_events(conn, 9999999) is False

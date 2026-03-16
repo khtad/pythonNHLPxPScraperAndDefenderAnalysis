@@ -1,24 +1,32 @@
 import datetime
+import os
 
-from nhl_api import get_weekly_schedule, get_play_by_play_data
+from nhl_api import get_weekly_schedule, get_full_play_by_play
 from database import (create_table, insert_data, create_connection,
                       create_collection_log_table, is_game_collected,
                       mark_date_collected, get_last_collected_date,
                       fix_incomplete_collection_log,
-                      deduplicate_existing_tables)
+                      deduplicate_existing_tables,
+                      ensure_xg_schema, game_has_shot_events,
+                      insert_shot_events,
+                      DATABASE_DIR, DATABASE_PATH)
+from xg_features import extract_shot_events
 
-DATABASE_PATH = "nhl_data.db"
 NHL_FIRST_GAME_DATE = datetime.date(2007, 10, 3)  # earliest available game in NHL API
 
 def main():
     start_date = NHL_FIRST_GAME_DATE
     end_date = datetime.date.today()
 
+    # Ensure the data directory exists
+    os.makedirs(DATABASE_DIR, exist_ok=True)
+
     # Connect to the database
     conn = create_connection(DATABASE_PATH)
     create_collection_log_table(conn)
     fix_incomplete_collection_log(conn)
     deduplicate_existing_tables(conn)
+    ensure_xg_schema(conn)
 
     # Resume from the day after the last fully-collected date
     last_collected = get_last_collected_date(conn)
@@ -41,17 +49,40 @@ def main():
             games_found = len(game_ids)
             games_collected = 0
 
+            print(f"Processing date {date_str} ({games_found} games)")
+
             for game_id in game_ids:
                 if is_game_collected(conn, game_id):
                     print(f"Skipping already-collected game {game_id}")
                     games_collected += 1
                     continue
 
-                play_by_play_data = get_play_by_play_data(game_id)
-                if play_by_play_data:
-                    create_table(conn, game_id)
-                    insert_data(conn, game_id, play_by_play_data)
+                full_data = get_full_play_by_play(game_id)
+                if full_data is None:
+                    print(f"No data returned for game {game_id}, skipping")
                     games_collected += 1
+                    continue
+
+                # Raw storage (simplified rows)
+                simplified_rows = [
+                    {
+                        "period": play.get("periodDescriptor", {}).get("number"),
+                        "time": play.get("timeInPeriod"),
+                        "event": play.get("typeDescKey"),
+                        "description": play.get("typeDescKey"),
+                    }
+                    for play in full_data.get("plays", [])
+                ]
+                create_table(conn, game_id)
+                insert_data(conn, game_id, simplified_rows)
+
+                # Shot event extraction
+                if not game_has_shot_events(conn, game_id):
+                    shot_events = extract_shot_events(full_data)
+                    if shot_events:
+                        insert_shot_events(conn, shot_events)
+
+                games_collected += 1
 
             mark_date_collected(conn, date_str, games_found, games_collected)
 

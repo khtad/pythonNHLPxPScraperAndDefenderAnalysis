@@ -1,9 +1,14 @@
 # database.py
 
+import os
 import re
 import sqlite3
 from datetime import date, datetime, timedelta
 from sqlite3 import Error
+
+DATABASE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+DATABASE_FILENAME = "nhl_data.db"
+DATABASE_PATH = os.path.join(DATABASE_DIR, DATABASE_FILENAME)
 
 _GAME_TABLE_PREFIX = "game_"
 _VALID_POSITION_GROUPS = ("F", "D", "G")
@@ -11,7 +16,7 @@ _FEATURE_SET_VERSION = "v1"
 
 # ── xG Phase 0: schema versions ──────────────────────────────────────
 
-_XG_EVENT_SCHEMA_VERSION = "v1"
+_XG_EVENT_SCHEMA_VERSION = "v2"
 _XG_FEATURE_SCHEMA_VERSION = "v1"
 
 # ── xG Phase 0: data-contract constants ──────────────────────────────
@@ -39,6 +44,12 @@ VALID_MANPOWER_STATES = (
     "4v3",
     "3v4",
     "3v3",
+    "6v5",
+    "5v6",
+    "6v4",
+    "4v6",
+    "6v3",
+    "3v6",
 )
 
 VALID_SCORE_STATES = (
@@ -351,6 +362,8 @@ def create_shot_events_table(conn):
             shooter_id INTEGER,
             score_state TEXT,
             manpower_state TEXT,
+            seconds_since_faceoff INTEGER,
+            faceoff_zone_code TEXT,
             event_schema_version TEXT NOT NULL DEFAULT '{_XG_EVENT_SCHEMA_VERSION}',
             UNIQUE(game_id, event_idx)
         )
@@ -440,8 +453,80 @@ def validate_shot_events_quality(conn):
     }
 
 
+def _migrate_shot_events_v1_to_v2(conn):
+    """Add seconds_since_faceoff and faceoff_zone_code columns if missing."""
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(shot_events)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+
+    if "seconds_since_faceoff" not in existing_cols:
+        cursor.execute(
+            "ALTER TABLE shot_events ADD COLUMN seconds_since_faceoff INTEGER"
+        )
+    if "faceoff_zone_code" not in existing_cols:
+        cursor.execute(
+            "ALTER TABLE shot_events ADD COLUMN faceoff_zone_code TEXT"
+        )
+    conn.commit()
+
+
+_SHOT_EVENTS_INSERT_COLUMNS = (
+    "game_id", "event_idx", "period", "time_in_period",
+    "time_remaining_seconds", "shot_type", "x_coord", "y_coord",
+    "distance_to_goal", "angle_to_goal", "is_goal",
+    "shooting_team_id", "goalie_id", "shooter_id",
+    "score_state", "manpower_state",
+    "seconds_since_faceoff", "faceoff_zone_code",
+    "event_schema_version",
+)
+
+_SHOT_EVENTS_ALLOWED_KEYS = frozenset(_SHOT_EVENTS_INSERT_COLUMNS)
+
+
+def insert_shot_events(conn, shot_event_dicts):
+    """Insert shot event dicts into shot_events table using executemany.
+
+    Keys are validated against an allowlist. event_schema_version is
+    auto-populated if not present. Duplicates are silently ignored.
+    """
+    if not shot_event_dicts:
+        return
+
+    for d in shot_event_dicts:
+        bad_keys = set(d.keys()) - _SHOT_EVENTS_ALLOWED_KEYS
+        if bad_keys:
+            raise ValueError(f"Invalid shot event keys: {bad_keys}")
+
+    cols = ", ".join(_SHOT_EVENTS_INSERT_COLUMNS)
+    placeholders = ", ".join(["?"] * len(_SHOT_EVENTS_INSERT_COLUMNS))
+    query = f"INSERT OR IGNORE INTO shot_events ({cols}) VALUES ({placeholders})"
+
+    rows = [
+        tuple(
+            d.get(c, _XG_EVENT_SCHEMA_VERSION) if c == "event_schema_version"
+            else d.get(c)
+            for c in _SHOT_EVENTS_INSERT_COLUMNS
+        )
+        for d in shot_event_dicts
+    ]
+
+    cursor = conn.cursor()
+    cursor.executemany(query, rows)
+    conn.commit()
+
+
+def game_has_shot_events(conn, game_id):
+    """Return True if shot_events contains at least one row for game_id."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM shot_events WHERE game_id = ? LIMIT 1", (game_id,)
+    )
+    return cursor.fetchone() is not None
+
+
 def ensure_xg_schema(conn):
     create_shot_events_table(conn)
+    _migrate_shot_events_v1_to_v2(conn)
 
 
 def create_connection(database_file):
