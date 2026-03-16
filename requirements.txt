@@ -1,2 +1,7 @@
 requests
 pytest
+
+# Optional: analysis notebooks
+jupyter
+matplotlib
+seaborn

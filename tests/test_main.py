@@ -6,6 +6,8 @@ import main
 from database import (
     create_connection, create_collection_log_table,
     mark_date_collected, ensure_xg_schema,
+    ensure_player_database_schema,
+    create_table, insert_data,
 )
 
 
@@ -25,6 +27,7 @@ class _UnclosableConn:
 def _in_memory_conn():
     conn = _UnclosableConn(sqlite3.connect(":memory:"))
     create_collection_log_table(conn)
+    ensure_player_database_schema(conn)
     ensure_xg_schema(conn)
     return conn
 
@@ -350,3 +353,148 @@ def test_main_skips_shot_extraction_when_already_processed(
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM shot_events")
     assert cur.fetchone()[0] == 1
+
+
+@patch("main.get_full_play_by_play")
+@patch("main.get_weekly_schedule")
+@patch("main.deduplicate_existing_tables")
+@patch("main.create_connection")
+def test_main_backfills_shot_events_for_existing_raw_game(
+    mock_conn, mock_dedup, mock_weekly, mock_full_pbp,
+):
+    """Existing raw tables should not prevent shot-event backfill."""
+    conn = _in_memory_conn()
+    mock_conn.return_value = conn
+
+    game_id = 2007020001
+    create_table(conn, game_id)
+    insert_data(conn, game_id, [{
+        "period": 1,
+        "time": "01:00",
+        "event": "shot-on-goal",
+        "description": "shot-on-goal",
+    }])
+
+    mock_weekly.return_value = ({"2007-10-03": [game_id]}, None)
+    mock_full_pbp.return_value = _simple_full_pbp(game_id)
+
+    with patch("main.datetime", _patch_datetime(datetime.date(2007, 10, 5))):
+        main.main()
+
+    mock_full_pbp.assert_called_once_with(game_id)
+
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM shot_events WHERE game_id = ?", (game_id,))
+    assert cur.fetchone()[0] == 1
+
+
+@patch("main.get_full_play_by_play")
+@patch("main.deduplicate_existing_tables")
+@patch("main.create_connection")
+def test_backfill_missing_game_data_processes_existing_raw_games(
+    mock_conn, mock_dedup, mock_full_pbp,
+):
+    """Explicit backfill should repair old databases with raw-only games."""
+    conn = _in_memory_conn()
+    mock_conn.return_value = conn
+
+    game_id = 2007020001
+    create_table(conn, game_id)
+    insert_data(conn, game_id, [{
+        "period": 1,
+        "time": "01:00",
+        "event": "shot-on-goal",
+        "description": "shot-on-goal",
+    }])
+
+    mock_full_pbp.return_value = _simple_full_pbp(game_id)
+
+    processed_games = main.backfill_missing_game_data(limit=1)
+
+    assert processed_games == 1
+    mock_full_pbp.assert_called_once_with(game_id)
+
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM shot_events WHERE game_id = ?", (game_id,))
+    assert cur.fetchone()[0] == 1
+
+
+@patch("main.get_full_play_by_play")
+@patch("main.deduplicate_existing_tables")
+@patch("main.create_connection")
+def test_backfill_missing_game_data_is_idempotent(
+    mock_conn, mock_dedup, mock_full_pbp,
+):
+    """A second backfill run should do no work for already-repaired games."""
+    conn = _in_memory_conn()
+    mock_conn.return_value = conn
+
+    game_id = 2007020001
+    create_table(conn, game_id)
+    insert_data(conn, game_id, [{
+        "period": 1,
+        "time": "01:00",
+        "event": "shot-on-goal",
+        "description": "shot-on-goal",
+    }])
+
+    mock_full_pbp.return_value = _simple_full_pbp(game_id)
+
+    first_processed_games = main.backfill_missing_game_data(limit=1)
+    second_processed_games = main.backfill_missing_game_data(limit=1)
+
+    assert first_processed_games == 1
+    assert second_processed_games == 0
+    mock_full_pbp.assert_called_once_with(game_id)
+
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM shot_events WHERE game_id = ?", (game_id,))
+    assert cur.fetchone()[0] == 1
+
+    cur.execute("SELECT COUNT(*) FROM games WHERE game_id = ?", (game_id,))
+    assert cur.fetchone()[0] == 1
+
+
+@patch("main.get_full_play_by_play")
+@patch("main.deduplicate_existing_tables")
+@patch("main.create_connection")
+def test_backfill_missing_game_data_skips_fully_processed_games(
+    mock_conn, mock_dedup, mock_full_pbp,
+):
+    """Explicit backfill should not refetch games that already have derived rows."""
+    conn = _in_memory_conn()
+    mock_conn.return_value = conn
+
+    game_id = 2007020001
+    create_table(conn, game_id)
+    insert_data(conn, game_id, [{
+        "period": 1,
+        "time": "01:00",
+        "event": "shot-on-goal",
+        "description": "shot-on-goal",
+    }])
+
+    mock_full_pbp.return_value = _simple_full_pbp(game_id)
+    assert main.backfill_missing_game_data(limit=1) == 1
+
+    mock_full_pbp.reset_mock()
+
+    processed_games = main.backfill_missing_game_data(limit=1)
+
+    assert processed_games == 0
+    mock_full_pbp.assert_not_called()
+
+
+@patch("main.backfill_missing_game_data")
+@patch("main.main")
+def test_run_scraper_and_backfill_calls_main_then_backfill(
+    mock_main_fn, mock_backfill,
+):
+    """The public wrapper should update the database, then backfill it."""
+    mock_backfill.return_value = 123
+
+    processed_games = main.run_scraper_and_backfill(backfill_limit=7)
+
+    mock_main_fn.assert_called_once_with()
+    mock_backfill.assert_called_once_with(limit=7)
+    assert processed_games == 123

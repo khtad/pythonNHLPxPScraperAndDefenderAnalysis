@@ -197,6 +197,18 @@ def test_deduplicate_existing_tables_leaves_already_unique_tables_untouched(conn
     assert cur.fetchone()[0] == 1
 
 
+def test_deduplicate_existing_tables_ignores_games_dimension_table(conn):
+    create_core_dimension_tables(conn)
+
+    deduplicate_existing_tables(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='games'"
+    )
+    assert cur.fetchone()[0] == "games"
+
+
 def test_phase_2_create_core_dimension_tables_creates_players_games_teams(conn):
     create_core_dimension_tables(conn)
 

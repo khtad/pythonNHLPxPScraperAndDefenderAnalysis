@@ -11,6 +11,8 @@ DATABASE_FILENAME = "nhl_data.db"
 DATABASE_PATH = os.path.join(DATABASE_DIR, DATABASE_FILENAME)
 
 _GAME_TABLE_PREFIX = "game_"
+_GAME_ID_SUFFIX_START = len(_GAME_TABLE_PREFIX)
+_SQLITE_TABLE_TYPE = "table"
 _VALID_POSITION_GROUPS = ("F", "D", "G")
 _FEATURE_SET_VERSION = "v1"
 
@@ -93,6 +95,27 @@ def _quote_identifier(name):
 
 def _game_table_name(game_id):
     return f"{_GAME_TABLE_PREFIX}{game_id}"
+
+
+def _is_raw_game_table_name(table_name):
+    if not table_name.startswith(_GAME_TABLE_PREFIX):
+        return False
+    return table_name[_GAME_ID_SUFFIX_START:].isdigit()
+
+
+def get_collected_game_ids(conn):
+    """Return sorted game IDs for collected raw game tables."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type = ? AND name LIKE ? ORDER BY name",
+        (_SQLITE_TABLE_TYPE, f"{_GAME_TABLE_PREFIX}%"),
+    )
+
+    game_ids = []
+    for (table_name,) in cursor.fetchall():
+        if _is_raw_game_table_name(table_name):
+            game_ids.append(int(table_name[_GAME_ID_SUFFIX_START:]))
+    return game_ids
 
 
 def create_table(conn, game_id):
@@ -190,6 +213,8 @@ def deduplicate_existing_tables(conn):
     )
 
     for table_name, create_sql in cursor.fetchall():
+        if not _is_raw_game_table_name(table_name):
+            continue
         if "UNIQUE(period, time, event, description)" in create_sql:
             continue
 
@@ -229,7 +254,10 @@ def create_core_dimension_tables(conn):
             game_date TEXT,
             season TEXT,
             home_team_id INTEGER,
-            away_team_id INTEGER
+            away_team_id INTEGER,
+            venue_name TEXT,
+            venue_city TEXT,
+            venue_utc_offset TEXT
         )
         """
     )
@@ -511,9 +539,412 @@ def game_has_shot_events(conn, game_id):
     return cursor.fetchone() is not None
 
 
+def game_has_metadata(conn, game_id):
+    """Return True if the games table has a row for game_id."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM games WHERE game_id = ? LIMIT 1", (game_id,))
+    return cursor.fetchone() is not None
+
+
+def upsert_game_metadata(conn, game_id, game_date, season,
+                         home_team_id, away_team_id,
+                         venue_name=None, venue_city=None,
+                         venue_utc_offset=None):
+    """Insert or update a row in the games dimension table."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO games (game_id, game_date, season,
+                              home_team_id, away_team_id,
+                              venue_name, venue_city, venue_utc_offset)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(game_id) DO UPDATE SET
+               game_date = excluded.game_date,
+               season = excluded.season,
+               home_team_id = excluded.home_team_id,
+               away_team_id = excluded.away_team_id,
+               venue_name = excluded.venue_name,
+               venue_city = excluded.venue_city,
+               venue_utc_offset = excluded.venue_utc_offset""",
+        (game_id, game_date, season, home_team_id, away_team_id,
+         venue_name, venue_city, venue_utc_offset),
+    )
+    conn.commit()
+
+
+def upsert_team(conn, team_id, abbrev, name):
+    """Insert or update a row in the teams dimension table."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO teams (team_id, team_abbrev, team_name)
+           VALUES (?, ?, ?)
+           ON CONFLICT(team_id) DO UPDATE SET
+               team_abbrev = excluded.team_abbrev,
+               team_name = excluded.team_name""",
+        (team_id, abbrev, name),
+    )
+    conn.commit()
+
+
+# ── Phase 2, Area 1: game_context table ─────────────────────────────
+
+_GAME_CONTEXT_SCHEMA_VERSION = "v1"
+
+
+def create_game_context_table(conn):
+    """Create the game_context table for rest/travel comparative features."""
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS game_context (
+            game_id INTEGER PRIMARY KEY,
+            home_rest_days INTEGER,
+            away_rest_days INTEGER,
+            rest_advantage INTEGER,
+            home_is_back_to_back INTEGER,
+            away_is_back_to_back INTEGER,
+            travel_distance_km REAL,
+            timezone_delta REAL,
+            context_schema_version TEXT NOT NULL
+                DEFAULT '{_GAME_CONTEXT_SCHEMA_VERSION}'
+        )
+        """
+    )
+    conn.commit()
+
+
+def game_has_context(conn, game_id):
+    """Return True if game_context has a row for game_id."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM game_context WHERE game_id = ? LIMIT 1", (game_id,)
+    )
+    return cursor.fetchone() is not None
+
+
+def _get_previous_game_date(conn, team_id, game_date, game_id):
+    """Return the most recent game_date for team_id before game_date, or None."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT game_date FROM games
+           WHERE (home_team_id = ? OR away_team_id = ?)
+             AND game_date < ?
+             AND game_id != ?
+           ORDER BY game_date DESC LIMIT 1""",
+        (team_id, team_id, game_date, game_id),
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def populate_game_context(conn, game_id):
+    """Compute and insert rest/travel context for a single game.
+
+    Queries games table for schedule info and arena_reference for locations.
+    Skips if game_context row already exists for game_id.
+    """
+    if game_has_context(conn, game_id):
+        return
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT game_date, home_team_id, away_team_id "
+        "FROM games WHERE game_id = ?",
+        (game_id,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return
+
+    game_date, home_team_id, away_team_id = row
+
+    from xg_features import compute_rest_days, is_back_to_back, haversine_distance, compute_timezone_delta
+    from arena_reference import get_arena_info
+
+    # Rest days
+    home_prev = _get_previous_game_date(conn, home_team_id, game_date, game_id)
+    away_prev = _get_previous_game_date(conn, away_team_id, game_date, game_id)
+
+    home_rest = compute_rest_days(game_date, home_prev)
+    away_rest = compute_rest_days(game_date, away_prev)
+
+    rest_advantage = (home_rest - away_rest) if (home_rest is not None and away_rest is not None) else None
+    home_b2b = is_back_to_back(home_rest)
+    away_b2b = is_back_to_back(away_rest)
+
+    # Travel distance and timezone delta
+    home_arena = get_arena_info(home_team_id)
+    away_arena = get_arena_info(away_team_id)
+
+    if home_arena and away_arena:
+        travel_dist = haversine_distance(
+            away_arena["lat"], away_arena["lon"],
+            home_arena["lat"], home_arena["lon"],
+        )
+        tz_delta = compute_timezone_delta(
+            away_arena["timezone_utc_offset"],
+            home_arena["timezone_utc_offset"],
+        )
+    else:
+        travel_dist = None
+        tz_delta = None
+
+    cursor.execute(
+        """INSERT OR IGNORE INTO game_context
+           (game_id, home_rest_days, away_rest_days, rest_advantage,
+            home_is_back_to_back, away_is_back_to_back,
+            travel_distance_km, timezone_delta, context_schema_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (game_id, home_rest, away_rest, rest_advantage,
+         home_b2b, away_b2b, travel_dist, tz_delta,
+         _GAME_CONTEXT_SCHEMA_VERSION),
+    )
+    conn.commit()
+
+
+# ── Phase 2, Area 4: venue bias diagnostics ─────────────────────────
+
+
+def create_venue_bias_diagnostics_table(conn):
+    """Create the venue_bias_diagnostics table."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS venue_bias_diagnostics (
+            venue_name TEXT NOT NULL,
+            season TEXT NOT NULL,
+            total_shots INTEGER,
+            avg_distance REAL,
+            x_coord_mean REAL,
+            x_coord_stddev REAL,
+            y_coord_mean REAL,
+            y_coord_stddev REAL,
+            shot_count_z_score REAL,
+            distance_z_score REAL,
+            bias_flag INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (venue_name, season)
+        )
+        """
+    )
+    conn.commit()
+
+
+def _migrate_games_add_venue_columns(conn):
+    """Add venue_name, venue_city, venue_utc_offset columns to games if missing."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='games'"
+    )
+    if cursor.fetchone() is None:
+        return
+    cursor.execute("PRAGMA table_info(games)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+
+    if "venue_name" not in existing_cols:
+        cursor.execute("ALTER TABLE games ADD COLUMN venue_name TEXT")
+    if "venue_city" not in existing_cols:
+        cursor.execute("ALTER TABLE games ADD COLUMN venue_city TEXT")
+    if "venue_utc_offset" not in existing_cols:
+        cursor.execute("ALTER TABLE games ADD COLUMN venue_utc_offset TEXT")
+    conn.commit()
+
+
+def compute_venue_season_stats(conn, venue_name, season):
+    """Compute shot statistics for a venue in a given season.
+
+    Returns dict with total_shots, avg_distance, x/y coord mean/stddev.
+    Standard deviation is computed in Python since SQLite lacks STDEV().
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT se.distance_to_goal, se.x_coord, se.y_coord
+           FROM shot_events se
+           JOIN games g ON se.game_id = g.game_id
+           WHERE g.venue_name = ? AND g.season = ?
+             AND se.x_coord IS NOT NULL
+             AND se.y_coord IS NOT NULL""",
+        (venue_name, season),
+    )
+    rows = cursor.fetchall()
+
+    if not rows:
+        return {
+            "total_shots": 0,
+            "avg_distance": None,
+            "x_coord_mean": None,
+            "x_coord_stddev": None,
+            "y_coord_mean": None,
+            "y_coord_stddev": None,
+        }
+
+    distances = [r[0] for r in rows if r[0] is not None]
+    x_coords = [r[1] for r in rows]
+    y_coords = [r[2] for r in rows]
+
+    total = len(rows)
+    avg_dist = sum(distances) / len(distances) if distances else None
+
+    x_mean = sum(x_coords) / total
+    y_mean = sum(y_coords) / total
+
+    x_stddev = _stddev(x_coords, x_mean)
+    y_stddev = _stddev(y_coords, y_mean)
+
+    return {
+        "total_shots": total,
+        "avg_distance": avg_dist,
+        "x_coord_mean": x_mean,
+        "x_coord_stddev": x_stddev,
+        "y_coord_mean": y_mean,
+        "y_coord_stddev": y_stddev,
+    }
+
+
+def compute_league_season_stats(conn, season):
+    """Compute league-wide shot statistics for a season.
+
+    Returns dict with total_shots, avg_distance, x/y coord mean/stddev,
+    plus per-venue shot count mean/stddev for z-score computation.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT se.distance_to_goal, se.x_coord, se.y_coord
+           FROM shot_events se
+           JOIN games g ON se.game_id = g.game_id
+           WHERE g.season = ?
+             AND se.x_coord IS NOT NULL
+             AND se.y_coord IS NOT NULL""",
+        (season,),
+    )
+    rows = cursor.fetchall()
+
+    if not rows:
+        return {
+            "total_shots": 0,
+            "avg_distance": None,
+            "avg_distance_stddev": None,
+            "x_coord_mean": None,
+            "y_coord_mean": None,
+            "venue_shot_count_mean": None,
+            "venue_shot_count_stddev": None,
+            "venue_avg_distance_mean": None,
+            "venue_avg_distance_stddev": None,
+        }
+
+    distances = [r[0] for r in rows if r[0] is not None]
+    x_coords = [r[1] for r in rows]
+    y_coords = [r[2] for r in rows]
+
+    total = len(rows)
+    avg_dist = sum(distances) / len(distances) if distances else None
+
+    # Per-venue aggregates for z-score denominators
+    cursor.execute(
+        """SELECT g.venue_name, COUNT(*) as cnt,
+                  AVG(se.distance_to_goal) as avg_d
+           FROM shot_events se
+           JOIN games g ON se.game_id = g.game_id
+           WHERE g.season = ? AND g.venue_name IS NOT NULL
+             AND se.x_coord IS NOT NULL
+           GROUP BY g.venue_name""",
+        (season,),
+    )
+    venue_rows = cursor.fetchall()
+    venue_counts = [r[1] for r in venue_rows]
+    venue_avg_dists = [r[2] for r in venue_rows if r[2] is not None]
+
+    vc_mean = sum(venue_counts) / len(venue_counts) if venue_counts else None
+    vc_stddev = _stddev(venue_counts, vc_mean) if vc_mean is not None else None
+
+    vd_mean = sum(venue_avg_dists) / len(venue_avg_dists) if venue_avg_dists else None
+    vd_stddev = _stddev(venue_avg_dists, vd_mean) if vd_mean is not None else None
+
+    return {
+        "total_shots": total,
+        "avg_distance": avg_dist,
+        "x_coord_mean": sum(x_coords) / total,
+        "y_coord_mean": sum(y_coords) / total,
+        "venue_shot_count_mean": vc_mean,
+        "venue_shot_count_stddev": vc_stddev,
+        "venue_avg_distance_mean": vd_mean,
+        "venue_avg_distance_stddev": vd_stddev,
+    }
+
+
+_VENUE_BIAS_Z_SCORE_THRESHOLD = 2.0
+
+
+def populate_venue_diagnostics(conn, season):
+    """Compute and insert venue bias diagnostics for all venues in a season."""
+    league = compute_league_season_stats(conn, season)
+    if league["total_shots"] == 0:
+        return
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT DISTINCT g.venue_name FROM games g
+           WHERE g.season = ? AND g.venue_name IS NOT NULL""",
+        (season,),
+    )
+    venues = [r[0] for r in cursor.fetchall()]
+
+    for venue_name in venues:
+        stats = compute_venue_season_stats(conn, venue_name, season)
+        if stats["total_shots"] == 0:
+            continue
+
+        # Z-scores
+        sc_z = None
+        if league["venue_shot_count_stddev"] and league["venue_shot_count_stddev"] > 0:
+            sc_z = (
+                (stats["total_shots"] - league["venue_shot_count_mean"])
+                / league["venue_shot_count_stddev"]
+            )
+
+        dist_z = None
+        if (league["venue_avg_distance_stddev"]
+                and league["venue_avg_distance_stddev"] > 0
+                and stats["avg_distance"] is not None):
+            dist_z = (
+                (stats["avg_distance"] - league["venue_avg_distance_mean"])
+                / league["venue_avg_distance_stddev"]
+            )
+
+        bias_flag = 0
+        if sc_z is not None and abs(sc_z) > _VENUE_BIAS_Z_SCORE_THRESHOLD:
+            bias_flag = 1
+        if dist_z is not None and abs(dist_z) > _VENUE_BIAS_Z_SCORE_THRESHOLD:
+            bias_flag = 1
+
+        cursor.execute(
+            """INSERT OR REPLACE INTO venue_bias_diagnostics
+               (venue_name, season, total_shots, avg_distance,
+                x_coord_mean, x_coord_stddev, y_coord_mean, y_coord_stddev,
+                shot_count_z_score, distance_z_score, bias_flag)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (venue_name, season, stats["total_shots"], stats["avg_distance"],
+             stats["x_coord_mean"], stats["x_coord_stddev"],
+             stats["y_coord_mean"], stats["y_coord_stddev"],
+             sc_z, dist_z, bias_flag),
+        )
+
+    conn.commit()
+
+
+def _stddev(values, mean):
+    """Compute population standard deviation given values and their mean."""
+    if not values or len(values) < 2:
+        return 0.0
+    import math
+    variance = sum((v - mean) ** 2 for v in values) / len(values)
+    return math.sqrt(variance)
+
+
 def ensure_xg_schema(conn):
     create_shot_events_table(conn)
     _migrate_shot_events_v1_to_v2(conn)
+    _migrate_games_add_venue_columns(conn)
+    create_game_context_table(conn)
+    create_venue_bias_diagnostics_table(conn)
 
 
 def create_connection(database_file):
