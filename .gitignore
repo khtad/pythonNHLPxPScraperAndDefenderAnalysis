@@ -13,6 +13,7 @@ env/
 
 # Runtime data
 *.db
+*.log
 
 # IDE
 .idea/
