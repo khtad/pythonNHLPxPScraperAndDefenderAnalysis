@@ -13,6 +13,7 @@ from database import (
     NORMALIZED_Y_COORD_MIN,
     NORMALIZED_Y_COORD_MAX,
     create_shot_events_table,
+    create_core_dimension_tables,
     validate_shot_events_quality,
     ensure_xg_schema,
     insert_shot_events,
@@ -24,6 +25,7 @@ from database import (
 @pytest.fixture
 def conn():
     connection = sqlite3.connect(":memory:")
+    create_core_dimension_tables(connection)
     yield connection
     connection.close()
 

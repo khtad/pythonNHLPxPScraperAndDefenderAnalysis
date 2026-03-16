@@ -14,6 +14,20 @@ GOAL_Y_COORD = 0.0
 _REGULATION_PERIOD_LENGTH_SECONDS = 1200
 _SITUATION_CODE_LENGTH = 4
 
+# ── Phase 2, Area 3: faceoff recency constants ──────────────────────
+# Bin boundaries: (upper_bound_exclusive, label)
+# Evaluated in order; first match wins.
+_FACEOFF_RECENCY_BINS = (
+    (6, "immediate"),    # 0-5s
+    (16, "early"),       # 6-15s
+    (31, "mid"),         # 16-30s
+    (61, "late"),        # 31-60s
+)
+_FACEOFF_RECENCY_STEADY_STATE = "steady_state"  # 61+s
+_POST_FACEOFF_WINDOW_SECONDS = 10
+
+_EARTH_RADIUS_KM = 6371.0
+
 
 def parse_time_remaining(time_str):
     """Parse "MM:SS" string into integer seconds. Returns 0 on failure."""
@@ -263,3 +277,128 @@ def extract_shot_events(game_data):
         })
 
     return shot_events
+
+
+# ── Phase 2, Area 3: faceoff recency features ───────────────────────
+
+
+def classify_faceoff_recency(seconds_since_faceoff):
+    """Classify seconds since faceoff into a recency bin.
+
+    Returns one of: "immediate" (0-5s), "early" (6-15s), "mid" (16-30s),
+    "late" (31-60s), "steady_state" (61+s), or None for invalid input.
+    """
+    if seconds_since_faceoff is None or seconds_since_faceoff < 0:
+        return None
+    for upper_bound, label in _FACEOFF_RECENCY_BINS:
+        if seconds_since_faceoff < upper_bound:
+            return label
+    return _FACEOFF_RECENCY_STEADY_STATE
+
+
+def faceoff_zone_recency_interaction(zone_code, recency_bin):
+    """Create a zone-recency interaction feature string.
+
+    Returns e.g. "O_immediate" or None if either input is None.
+    """
+    if zone_code is None or recency_bin is None:
+        return None
+    return f"{zone_code}_{recency_bin}"
+
+
+def is_post_faceoff_window(seconds_since_faceoff,
+                           window_seconds=_POST_FACEOFF_WINDOW_SECONDS):
+    """Return 1 if within the post-faceoff window, 0 otherwise, None if unknown."""
+    if seconds_since_faceoff is None or seconds_since_faceoff < 0:
+        return None
+    return 1 if seconds_since_faceoff <= window_seconds else 0
+
+
+# ── Phase 2: game metadata extraction ───────────────────────────────
+
+
+def extract_game_metadata(game_data):
+    """Extract game-level metadata from NHL API game JSON.
+
+    Returns a dict with game_id, game_date, season, home/away team info,
+    and venue metadata, or None if game_id is missing.
+    """
+    game_id = game_data.get("id")
+    if game_id is None:
+        return None
+
+    home_team = game_data.get("homeTeam", {})
+    away_team = game_data.get("awayTeam", {})
+
+    return {
+        "game_id": game_id,
+        "game_date": game_data.get("gameDate"),
+        "season": game_data.get("season"),
+        "home_team_id": home_team.get("id"),
+        "home_team_abbrev": home_team.get("abbrev"),
+        "home_team_name": home_team.get("placeName", {}).get("default")
+                          if isinstance(home_team.get("placeName"), dict)
+                          else home_team.get("placeName"),
+        "away_team_id": away_team.get("id"),
+        "away_team_abbrev": away_team.get("abbrev"),
+        "away_team_name": away_team.get("placeName", {}).get("default")
+                          if isinstance(away_team.get("placeName"), dict)
+                          else away_team.get("placeName"),
+        "venue_name": game_data.get("venue", {}).get("default")
+                      if isinstance(game_data.get("venue"), dict)
+                      else game_data.get("venue"),
+        "venue_city": game_data.get("venueLocation", {}).get("default")
+                      if isinstance(game_data.get("venueLocation"), dict)
+                      else game_data.get("venueLocation"),
+        "venue_utc_offset": game_data.get("venueUTCOffset"),
+    }
+
+
+# ── Phase 2, Area 1: rest/travel computation ────────────────────────
+
+
+def compute_rest_days(game_date_str, prev_game_date_str):
+    """Compute rest days between two ISO date strings.
+
+    Returns integer days between games, or None if either date is None.
+    """
+    if game_date_str is None or prev_game_date_str is None:
+        return None
+    from datetime import date as _date
+    current = _date.fromisoformat(game_date_str)
+    previous = _date.fromisoformat(prev_game_date_str)
+    return (current - previous).days
+
+
+def is_back_to_back(rest_days):
+    """Return 1 if rest_days indicates a back-to-back (1 day), 0 otherwise, None if unknown."""
+    if rest_days is None:
+        return None
+    return 1 if rest_days == 1 else 0
+
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """Compute great-circle distance in km between two lat/lon points."""
+    lat1_r, lon1_r = math.radians(lat1), math.radians(lon1)
+    lat2_r, lon2_r = math.radians(lat2), math.radians(lon2)
+
+    dlat = lat2_r - lat1_r
+    dlon = lon2_r - lon1_r
+
+    a = math.sin(dlat / 2) ** 2 + (
+        math.cos(lat1_r) * math.cos(lat2_r) * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.asin(math.sqrt(a))
+
+    return _EARTH_RADIUS_KM * c
+
+
+def compute_timezone_delta(away_utc_offset, home_utc_offset):
+    """Compute timezone delta in hours (home - away).
+
+    Positive means the away team is traveling east (later timezone).
+    Returns None if either offset is None.
+    """
+    if away_utc_offset is None or home_utc_offset is None:
+        return None
+    return home_utc_offset - away_utc_offset
