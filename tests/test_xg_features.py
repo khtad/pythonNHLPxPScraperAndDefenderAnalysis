@@ -227,10 +227,25 @@ def test_normalize_coords_home_defends_right_away_shoots():
     assert (x, y) == (70, 10)
 
 
-def test_normalize_coords_missing_defending_side():
+def test_normalize_coords_missing_defending_side_positive_x():
+    # Shot already in positive-x half → no flip needed
     x, y = normalize_coordinates(70, 10, shooting_team_id=10, home_team_id=10,
                                  defending_side=None)
     assert (x, y) == (70, 10)
+
+
+def test_normalize_coords_missing_defending_side_negative_x():
+    # Shot in negative-x half → flip so distance-to-goal uses correct end
+    x, y = normalize_coordinates(-70, 10, shooting_team_id=10, home_team_id=10,
+                                 defending_side=None)
+    assert (x, y) == (70, -10)
+
+
+def test_normalize_coords_missing_defending_side_zero_x():
+    # Shot at center ice → no flip (x=0 is not < 0)
+    x, y = normalize_coordinates(0, 5, shooting_team_id=10, home_team_id=10,
+                                 defending_side=None)
+    assert (x, y) == (0, 5)
 
 
 # ── compute_distance_to_goal ──────────────────────────────────────────

@@ -98,9 +98,13 @@ def normalize_coordinates(x, y, shooting_team_id, home_team_id, defending_side):
 
     Home defends left -> home attacks right (+x), away attacks left (-x).
     Home defends right -> home attacks left (-x), away attacks right (+x).
-    If defending_side is missing, returns raw coordinates.
+    If defending_side is missing, infers attacking direction from the shot's
+    x-coordinate: negative x implies the team is shooting toward the -x goal,
+    so we flip to keep the convention that shots attack toward +x (GOAL_X_COORD).
     """
     if defending_side is None:
+        if x < 0:
+            return (-x, -y)
         return (x, y)
 
     home_attacks_positive = (defending_side == "left")
