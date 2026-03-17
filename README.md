@@ -1,6 +1,6 @@
 # NHL Play-by-Play Scraper
 
-Scrapes NHL play-by-play (PXP) data from the NHL Stats API and stores it in SQLite. Includes a normalized player analytics schema and the foundations for an expected goals (xG) model.
+Scrapes NHL play-by-play (PXP) data from the NHL Stats API and stores it in SQLite. Includes a normalized player analytics schema, a canonical shot events layer, xG feature extraction, and exploratory analysis notebooks.
 
 ## Scope
 
@@ -8,25 +8,38 @@ Scrapes NHL play-by-play (PXP) data from the NHL Stats API and stores it in SQLi
 - Store each game's events in `nhl_data.db` as table `game_<game_id>`
 - Resume interrupted scrapes without re-downloading completed games or skipping failed dates
 - Maintain normalized player analytics tables for player/game modeling workflows
-- Provide a canonical shot events schema for xG model development
+- Provide a canonical shot events schema with xG features for model development
+- Backfill derived tables (shot events, game context) for any games missing them
 
 ## Project structure
 
 ```
+data/
+  nhl_data.db           SQLite database (not checked in; created at runtime)
 src/
-  main.py           Scrape loop with weekly pagination from 2007-10-03 to today
-  nhl_api.py        NHL Stats API client (schedule + play-by-play endpoints)
-  database.py       SQLite operations: raw events, collection tracking, player schema, xG schema
+  main.py               Scrape loop with weekly pagination from 2007-10-03 to today
+  nhl_api.py            NHL Stats API client (schedule + play-by-play endpoints)
+  database.py           SQLite operations: raw events, collection tracking, player schema, xG schema
+  xg_features.py        Pure feature-extraction functions (coordinates, score state, faceoff context, rest/travel)
+  arena_reference.py    Static arena location data (lat/lon, UTC offset) for all 32 teams + historical
+  backfill_status.py    CLI tool to inspect database completeness and backfill log progress
 tests/
-  conftest.py       Pytest path setup
-  test_database.py  Schema, collection log, and data quality tests
-  test_main.py      Scraper loop integration tests
-  test_nhl_api.py   API parsing and error-path tests
-  test_xg_schema.py xG Phase 0 schema and validation tests
+  conftest.py           Pytest path setup
+  test_database.py      Schema, collection log, and data quality tests
+  test_game_context.py  Game context table and backfill tests
+  test_main.py          Scraper loop integration tests
+  test_nhl_api.py       API parsing and error-path tests
+  test_xg_features.py   xG feature extraction unit tests
+  test_xg_schema.py     xG Phase 0 schema and validation tests
+notebooks/
+  faceoff_decay_analysis.ipynb   Phase 2 Area 3: shot quality decay by time since faceoff and zone
+  rest_travel_analysis.ipynb     Phase 2 Area 1: rest days, back-to-back status, travel distance, timezone effects
+  venue_bias_analysis.ipynb      Phase 2 Area 4: scorekeeper bias detection by venue
+  zone_start_signal.ipynb        Phase 2 Area 2: zone deployment context from faceoff zone codes
 docs/
   player_database_plan.md          Player schema design doc
   xg_model_roadmap.md              xG model development roadmap
-  xg_model_components/             Detailed component design docs
+  xg_model_components/             Detailed component design docs (8 parts)
   strength_estimation_approaches.md Team strength estimation approaches
 ```
 
@@ -53,19 +66,49 @@ Initialize with `ensure_player_database_schema(conn)`:
 - **`player_game_stats`** — one row per `(player_id, game_id)` with counting stats, TOI, and xG placeholders
 - **`player_game_features`** — materialized rolling/rank features with `feature_set_version` tracking
 
-### xG Phase 0: shot events
+### xG shot events
 
 Initialize with `ensure_xg_schema(conn)`:
 
-- **`shot_events`** — canonical shot event table with coordinates, shot type, score/manpower state, and `event_schema_version` for training reproducibility
+- **`shot_events`** — canonical shot event table with normalized coordinates, shot type, distance/angle to goal, score state, manpower state, faceoff timing/zone, and `event_schema_version` for training reproducibility
 - **Data contracts**: validated enums for shot types, manpower states, score states, and NHL rink coordinate bounds
 - **`validate_shot_events_quality()`** — checks shot type, manpower/score state, coordinate ranges, is_goal values, time remaining, and duplicate events
+
+### Game context
+
+- **`game_context`** — per-game metadata (teams, venue, venue lat/lon, UTC offset, home/away rest days, travel distance, timezone delta) derived from raw API data and arena reference data
+- Includes `context_schema_version` for version-aware backfill
 
 ### Data quality validation
 
 - `validate_player_game_stats_quality()` — duplicate keys, negative/excessive TOI, invalid position groups
 - `validate_shot_events_quality()` — invalid enums, out-of-range coordinates, negative time, duplicate events
-- Both validators use shared helpers with parameterized queries and quoted identifiers
+
+## xG feature extraction (`xg_features.py`)
+
+Pure Python functions (no DB or HTTP dependencies) for computing shot event features:
+
+- **Coordinate normalization** — flips coordinates so the shooting team always attacks toward +x
+- **Distance and angle to goal** — Euclidean distance and arc-tangent angle from normalized coordinates
+- **Score state classification** — tied / up1 / up2 / up3plus / down1 / down2 / down3plus
+- **Manpower state classification** — parses 4-digit situation codes into skater counts (5v5, 5v4, 4v5, etc.)
+- **Faceoff context** — seconds since last faceoff, faceoff zone code, recency bin (immediate / early / mid / late / steady_state), zone-recency interaction feature
+- **Rest and travel** — rest days between games, back-to-back flag, haversine travel distance, timezone delta
+
+## Arena reference data (`arena_reference.py`)
+
+Static lookup table mapping `team_id` to arena city, UTC offset (standard time), latitude, and longitude. Covers all 32 current NHL teams plus historical franchises (Atlanta Thrashers, original Phoenix Coyotes, etc.).
+
+## Backfill status (`backfill_status.py`)
+
+CLI tool for inspecting database completeness:
+
+```bash
+cd src
+python backfill_status.py [--log-path PATH] [--tail-lines N]
+```
+
+Reports raw game table count, metadata/shot event/game context row counts, how many games are missing derived data, last completed collection date, and the tail of the backfill log.
 
 ## Security
 
@@ -94,6 +137,17 @@ python main.py
 
 Scrapes from `2007-10-03` through today, storing results in `nhl_data.db`. The scraper automatically resumes from where it left off on subsequent runs.
 
+## Notebooks
+
+The `notebooks/` directory contains Jupyter analysis notebooks for the xG model Phase 2 signal validation work. Each notebook connects to `nhl_data.db` and reads from the derived tables (`shot_events`, `game_context`). Run `backfill_status.py` first to confirm derived tables are populated before opening a notebook.
+
+| Notebook | Phase | Topic |
+|---|---|---|
+| `rest_travel_analysis.ipynb` | Phase 2 Area 1 | Rest days, back-to-back, travel distance, timezone effects on shot quality |
+| `zone_start_signal.ipynb` | Phase 2 Area 2 | Faceoff zone code as a zone-deployment proxy |
+| `faceoff_decay_analysis.ipynb` | Phase 2 Area 3 | Shot quality decay by time since faceoff, separated by zone |
+| `venue_bias_analysis.ipynb` | Phase 2 Area 4 | Scorekeeper bias detection by venue |
+
 ## Testing
 
 ```bash
@@ -107,12 +161,14 @@ Or if the venv already exists:
 /tmp/test-venv/bin/python -m pytest -q
 ```
 
-80 tests covering:
+243 tests covering:
 
 - Raw table creation, deduplication, and unique constraints
 - Collection log idempotency (incomplete dates, retries, resume logic)
 - Player-schema phases (dimensions, fact table, feature table, quality checks)
-- xG Phase 0 (shot events DDL, validation paths, NULL coordinate handling)
+- xG shot events (DDL, validation paths, NULL coordinate handling, version-aware backfill)
+- xG feature extraction (coordinate normalization, distance/angle, score/manpower state, faceoff recency, rest/travel)
+- Game context extraction and backfill
 - NHL API parsing, error paths, rate limiting, and session reuse
 - Scraper loop pagination, date filtering, and resume behavior
 
@@ -123,3 +179,4 @@ No live NHL API calls are made during tests.
 - A full historical scrape issues many API requests; the built-in rate limiter spaces game API calls by 2 seconds.
 - HTTP connections are reused via `requests.Session` to reduce TCP/TLS overhead.
 - All SQL identifiers from external input are validated before use.
+- Derived tables (`shot_events`, `game_context`, `player_game_features`) store a schema version column so stale rows are automatically detected and replaced when the extraction logic changes.
