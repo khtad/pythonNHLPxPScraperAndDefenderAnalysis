@@ -133,6 +133,32 @@ Changes that do **not** require a version bump:
 - Adding new derived tables (they have their own version constant)
 - Changes to raw event ingestion (`create_table`/`insert_data`) — raw tables have no version column
 
+## Statistical Analysis Rigor Requirements
+
+All statistical analyses in this project — whether in notebooks, source code, or design docs — must meet the following minimum rigor framework. Visual inspection and point estimates alone are never sufficient to justify a feature inclusion decision or a data quality conclusion.
+
+### Minimum acceptable framework
+
+1. **Confidence intervals on all reported rates and proportions.** Never report a bare point estimate (e.g., "goal rate = 8.2%"). Always include a 95% bootstrap or Wilson CI. Use `bootstrap_goal_rate_ci()` from the validation framework notebook or equivalent.
+
+2. **Formal hypothesis tests for group comparisons.** When comparing rates across categories (e.g., goal rate by shot type), use chi-squared or Fisher exact tests. Report the test statistic, degrees of freedom, and p-value. A visual difference in a bar chart is not evidence.
+
+3. **Effect sizes to separate statistical from practical significance.** With 100k+ shots, tiny meaningless differences are statistically significant. Always compute an effect size measure (Cohen's h for proportions, Cohen's d for continuous). Apply the decision rule: a feature difference is *practically meaningful* only if |Cohen's h| >= 0.2 AND the comparison is adequately powered.
+
+4. **Sample size adequacy checks.** For stratified analyses, report the number of observations per cell. At the project's ~8% base rate, cells with fewer than 400 shots are underpowered to detect a 50% relative difference at 80% power. Flag underpowered cells explicitly and do not draw conclusions from them.
+
+5. **Train/test separation for any finding that informs model design.** Bin boundaries, thresholds, feature selection decisions, and decay-curve parameters must be validated on held-out data. Use the temporal cross-validation harness (season-block CV) from `model_validation_framework.ipynb`. Findings computed on the full dataset are exploratory only and must be labeled as such.
+
+6. **Calibration analysis for any probability model.** Report reliability diagrams, Hosmer-Lemeshow test (p > 0.05 required), and calibration slope/intercept (target: slope in [0.95, 1.05]). Calibration must be checked per-segment (even strength, power play, short-handed) separately, with max subgroup calibration error < 3 percentage points.
+
+7. **Temporal stability assessment.** Any finding claimed to generalize must be checked across at least 3 held-out seasons. Report linear trend in the metric of interest. AUC drift exceeding 0.02/season signals concept drift and must be documented.
+
+8. **Leakage audit for every feature.** Before including a feature in a model, document: (a) whether it is available at prediction time, (b) whether it encodes post-event information, (c) whether it proxies for a confounder. Features with HIGH confounder risk or AMBIGUOUS temporal availability must be investigated and resolved before model training.
+
+### Reference implementation
+
+The validation framework notebook (`notebooks/model_validation_framework.ipynb`) and its design doc (`docs/xg_model_components/06_model_validation_framework.md`) implement all eight requirements. New analyses should follow the same patterns: named constants for all thresholds, reusable helper functions (`bootstrap_goal_rate_ci`, `cohens_h`, `hosmer_lemeshow_test`, `calibration_slope_intercept`, `run_temporal_cv`), and a summary scorecard with explicit pass/fail criteria.
+
 ## Pre-Submission Checklist
 
 - **Unreachable code**: Check all control paths in every modified function for unreachable code. Verify that no statements follow unconditional `return`, `raise`, `break`, or `continue` within the same block, and that mutually exclusive conditions (e.g., `!= 200` then `== 200`) don't leave dead code after the final branch.
