@@ -36,6 +36,9 @@ The target architecture must be modular enough to support incremental delivery a
 
 3. **Explicitly model shooter/goalie handedness interactions**
    - Include off-wing and same/opposite-handed release effects where data quality allows.
+   - **Detailed plan:** See `docs/xg_model_components/09_handedness_and_effective_angle.md`
+   - Phase B1: populate `shoots_catches`, add `is_off_wing` flag, let ridge regression learn interactions
+   - Phase B2: geometric effective goal exposure angle (deferred until data validates the off-wing effect)
 
 4. **Calibrate by season blocks (or era) and monitor drift**
    - Rink tracking and league style shifts can alter feature-outcome relationships.
@@ -84,6 +87,31 @@ The target architecture must be modular enough to support incremental delivery a
 
 7. **Forward compatibility**
    - Ensure model outputs can be consumed by future forecasting and scenario simulation tools.
+
+---
+
+## Current Implementation Status (as of 2026-03-17)
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 0 | **Complete** | `shot_events` schema v3, version-aware backfill, validation checks |
+| Phase 1 | **Complete** | Coordinate normalization, shot type taxonomy, score/manpower/time labels |
+| Phase 2 | **Mostly complete** | Rest/travel ✓, faceoff decay ✓, venue bias diagnostics ✓, zone start estimates partial |
+| Phase 3 | **Not started** | No model training code exists yet |
+| Phase 4 | **Not started** | Depends on Phase 3; handedness features designed (component 09) |
+| Phase 5–7 | **Not started** | Depends on Phase 3–4 |
+
+### Key gap for Phase 3: shooter handedness
+
+The `players.shoots_catches` column exists but is unpopulated. No player metadata API endpoint exists in `nhl_api.py`. This blocks all handedness-aware features (off-wing flag, effective angle, handedness × shot-type interactions). See component 09 for the detailed plan.
+
+### Recommended model approach for Phase 3
+
+The component 05 doc lists "logistic/GBDT" as the baseline. Given the user's preference for ridge regression:
+- Use `sklearn.linear_model.LogisticRegressionCV(penalty='l2')` (ridge-penalized logistic regression)
+- This gives the regularization benefits of ridge while producing calibrated probabilities for a binary target
+- Build interaction terms explicitly in the feature matrix (shot_type × distance, shot_type × angle, is_off_wing × shot_type, is_off_wing × angle) — roughly 70 features
+- Season-based temporal train/test split to avoid leakage
 
 ---
 
@@ -143,5 +171,6 @@ Detailed component plans are in:
 6. `docs/xg_model_components/06_rapm_on_xg.md`
 7. `docs/xg_model_components/07_team_strength_aggregation.md`
 8. `docs/xg_model_components/08_platform_extensibility_and_reuse.md`
+9. `docs/xg_model_components/09_handedness_and_effective_angle.md`
 
 These sub-documents define deliverables, implementation ideas, validation criteria, and extension points for each major system component.
