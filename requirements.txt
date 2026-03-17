@@ -4,4 +4,5 @@ pytest
 # Optional: analysis notebooks
 jupyter
 matplotlib
+numpy
 seaborn
