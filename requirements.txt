@@ -5,3 +5,4 @@ pytest
 jupyter
 matplotlib
 seaborn
+numpy
