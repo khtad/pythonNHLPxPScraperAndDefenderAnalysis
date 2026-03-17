@@ -8,6 +8,8 @@ from database import (create_table, insert_data, create_connection,
                       fix_incomplete_collection_log,
                       deduplicate_existing_tables,
                       ensure_xg_schema, game_has_shot_events,
+                      game_has_current_shot_events,
+                      delete_game_shot_events,
                       insert_shot_events, game_has_metadata,
                       upsert_game_metadata, upsert_team,
                       ensure_player_database_schema,
@@ -23,8 +25,8 @@ _BACKFILL_STATUS_SEPARATOR = ", "
 def _get_game_processing_state(conn, game_id):
     raw_events_present = is_game_collected(conn, game_id)
     metadata_present = game_has_metadata(conn, game_id)
-    shot_events_present = game_has_shot_events(conn, game_id)
-    return raw_events_present, metadata_present, shot_events_present
+    shot_events_current = game_has_current_shot_events(conn, game_id)
+    return raw_events_present, metadata_present, shot_events_current
 
 
 def _format_missing_game_data(raw_events_present, metadata_present, shot_events_present):
@@ -88,6 +90,9 @@ def _process_game(conn, game_id, raw_events_present, metadata_present, shot_even
             populate_game_context(conn, game_id)
 
     if not shot_events_present:
+        # Remove stale-version rows before re-ingesting
+        if game_has_shot_events(conn, game_id):
+            delete_game_shot_events(conn, game_id)
         shot_events = extract_shot_events(full_data)
         if shot_events:
             insert_shot_events(conn, shot_events)

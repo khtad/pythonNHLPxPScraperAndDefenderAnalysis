@@ -18,7 +18,7 @@ _FEATURE_SET_VERSION = "v1"
 
 # ── xG Phase 0: schema versions ──────────────────────────────────────
 
-_XG_EVENT_SCHEMA_VERSION = "v2"
+_XG_EVENT_SCHEMA_VERSION = "v3"
 _XG_FEATURE_SCHEMA_VERSION = "v1"
 
 # ── xG Phase 0: data-contract constants ──────────────────────────────
@@ -537,6 +537,24 @@ def game_has_shot_events(conn, game_id):
         "SELECT 1 FROM shot_events WHERE game_id = ? LIMIT 1", (game_id,)
     )
     return cursor.fetchone() is not None
+
+
+def game_has_current_shot_events(conn, game_id):
+    """Return True if shot_events has rows for game_id at the current schema version."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM shot_events "
+        "WHERE game_id = ? AND event_schema_version = ? LIMIT 1",
+        (game_id, _XG_EVENT_SCHEMA_VERSION),
+    )
+    return cursor.fetchone() is not None
+
+
+def delete_game_shot_events(conn, game_id):
+    """Delete all shot_events rows for a game (used before re-ingesting stale data)."""
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM shot_events WHERE game_id = ?", (game_id,))
+    conn.commit()
 
 
 def game_has_metadata(conn, game_id):
