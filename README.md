@@ -37,10 +37,8 @@ notebooks/
   venue_bias_analysis.ipynb      Phase 2 Area 4: scorekeeper bias detection by venue
   zone_start_signal.ipynb        Phase 2 Area 2: zone deployment context from faceoff zone codes
 docs/
-  player_database_plan.md          Player schema design doc
-  xg_model_roadmap.md              xG model development roadmap
-  xg_model_components/             Detailed component design docs (8 parts)
-  strength_estimation_approaches.md Team strength estimation approaches
+  xg_model_roadmap.md              xG model development roadmap (main plan)
+  xg_model_components/             Detailed component design docs (9 parts)
 ```
 
 ## Collection tracking and resume

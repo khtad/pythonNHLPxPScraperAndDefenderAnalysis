@@ -18,7 +18,8 @@ NHL Play-by-Play (PXP) scraper with a normalized player analytics schema. Raw ev
 │   ├── test_database.py            # DB schema + data quality unit tests
 │   └── test_nhl_api.py             # API parsing/error-path unit tests
 ├── docs/
-│   └── player_database_plan.md     # Design doc driving player schema phases
+│   ├── xg_model_roadmap.md         # xG model development roadmap (main plan)
+│   └── xg_model_components/        # Detailed component design docs
 ├── README.md                       # Project documentation
 └── requirements.txt                # Dependencies
 ```
@@ -74,7 +75,7 @@ player-schema bootstrap
 ## Testing Notes
 
 - Framework: `pytest` + in-memory SQLite + request mocks
-- The player-schema tests are written in phase style (Phase 2-5 from the design doc)
+- The player-schema tests are written in phase style (dimensions, fact table, features, validation)
 - **How to run tests**: Use `python3 -m venv /tmp/test-venv && /tmp/test-venv/bin/pip install -q pytest requests && /tmp/test-venv/bin/python -m pytest -q` (or reuse the venv if it already exists: `/tmp/test-venv/bin/python -m pytest -q`). Do not call `pytest` directly — the system Python does not have pytest installed.
 - **Notebook dependencies**: When creating or modifying Jupyter notebooks, automatically install any required packages (e.g., `matplotlib`, `seaborn`, `numpy`, `ipykernel`) into the project virtual environment at `/tmp/test-venv` using `/tmp/test-venv/bin/pip install`. Do not assume packages are already installed — always install before first use.
 

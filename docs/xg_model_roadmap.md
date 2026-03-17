@@ -1,7 +1,7 @@
 # NHL xG Model Roadmap (Main Plan)
 
 ## Purpose
-This document updates the prior strength-estimation plan and pivots toward building a full expected-goals (xG) system that can support:
+This document is the main plan for building a full expected-goals (xG) system that can support:
 
 1. shot-level xG estimation,
 2. player RAPM-style value estimation,
