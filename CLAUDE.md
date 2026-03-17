@@ -103,10 +103,41 @@ player-schema bootstrap
      - When scanning `sqlite_master` for raw game tables, never rely on `LIKE 'game_%'` alone. Always filter to the stricter pattern `game_<digits>` so dimension tables such as `games` are never misclassified as raw event tables.
      - Notebook analysis instructions must not treat the presence of a large database file or raw game tables as evidence that analysis tables are populated. Include an explicit refresh/backfill step or note whenever notebooks depend on derived tables.
 
+## Derived-Data Versioning & Backfill
+
+Each derived table stores a schema version in every row, recording which code version produced it:
+
+| Table | Version constant | Column |
+|-------|-----------------|--------|
+| `shot_events` | `_XG_EVENT_SCHEMA_VERSION` (database.py) | `event_schema_version` |
+| `game_context` | `_GAME_CONTEXT_SCHEMA_VERSION` (database.py) | `context_schema_version` |
+| `player_game_features` | `_FEATURE_SET_VERSION` (database.py) | `feature_set_version` |
+
+**How version-aware backfill works:**
+
+1. `_get_game_processing_state()` uses `game_has_current_shot_events()`, which checks both row existence AND `event_schema_version = _XG_EVENT_SCHEMA_VERSION`.
+2. If rows exist but at an older version, the game is flagged as needing reprocessing.
+3. `_process_game()` deletes stale-version rows via `delete_game_shot_events()` before re-inserting with the current version.
+4. Running `backfill_missing_game_data()` automatically detects and replaces all stale rows.
+
+**When to bump a version constant:**
+
+Any change to code that affects the **values** written to a derived table requires a version bump. Examples:
+- Changing coordinate normalization, distance/angle calculation, or any feature extraction logic (`xg_features.py`)
+- Adding, removing, or redefining a column in a derived table
+- Changing how manpower state, score state, or faceoff context is classified
+- Fixing a bug in data parsing that changes what gets stored
+
+Changes that do **not** require a version bump:
+- Refactoring that doesn't change output values (renaming internal variables, extracting helpers)
+- Adding new derived tables (they have their own version constant)
+- Changes to raw event ingestion (`create_table`/`insert_data`) — raw tables have no version column
+
 ## Pre-Submission Checklist
 
 - **Unreachable code**: Check all control paths in every modified function for unreachable code. Verify that no statements follow unconditional `return`, `raise`, `break`, or `continue` within the same block, and that mutually exclusive conditions (e.g., `!= 200` then `== 200`) don't leave dead code after the final branch.
 - **Interface simplicity**: Review all new or modified function signatures and module boundaries. Minimize the number of parameters, avoid unnecessary configuration options, and prefer simple interfaces over flexible ones. If a function can accomplish its job with fewer arguments or a narrower return type, simplify it before submitting.
+- **Backfill impact check**: If any modified function changes the values written to a derived table (`shot_events`, `game_context`, `player_game_features`), bump the corresponding version constant in `database.py`. The version-aware backfill will automatically detect stale rows and reprocess them on the next run.
 
 ## Development Guardrails
 

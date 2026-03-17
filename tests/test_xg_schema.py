@@ -18,6 +18,8 @@ from database import (
     ensure_xg_schema,
     insert_shot_events,
     game_has_shot_events,
+    game_has_current_shot_events,
+    delete_game_shot_events,
     _migrate_shot_events_v1_to_v2,
 )
 
@@ -327,8 +329,8 @@ def test_valid_manpower_states_contains_pulled_goalie_states():
     assert required.issubset(set(VALID_MANPOWER_STATES))
 
 
-def test_xg_event_schema_version_is_v2():
-    assert _XG_EVENT_SCHEMA_VERSION == "v2"
+def test_xg_event_schema_version_is_v3():
+    assert _XG_EVENT_SCHEMA_VERSION == "v3"
 
 
 # ── Phase 1: migration ────────────────────────────────────────────────
@@ -484,3 +486,105 @@ def test_game_has_shot_events_true_when_present(conn):
     insert_shot_events(conn, [event])
     assert game_has_shot_events(conn, 2023020001) is True
     assert game_has_shot_events(conn, 9999999) is False
+
+
+# ── Phase 1: game_has_current_shot_events ─────────────────────────────
+
+
+def test_game_has_current_shot_events_true_for_current_version(conn):
+    ensure_xg_schema(conn)
+    event = {
+        "game_id": 2023020001,
+        "event_idx": 1,
+        "period": 1,
+        "time_in_period": "10:00",
+        "time_remaining_seconds": 600,
+        "shot_type": "wrist",
+        "is_goal": 0,
+        "shooting_team_id": 10,
+    }
+    insert_shot_events(conn, [event])
+    assert game_has_current_shot_events(conn, 2023020001) is True
+
+
+def test_game_has_current_shot_events_false_for_stale_version(conn):
+    ensure_xg_schema(conn)
+    event = {
+        "game_id": 2023020001,
+        "event_idx": 1,
+        "period": 1,
+        "time_in_period": "10:00",
+        "time_remaining_seconds": 600,
+        "shot_type": "wrist",
+        "is_goal": 0,
+        "shooting_team_id": 10,
+    }
+    insert_shot_events(conn, [event])
+    # Manually downgrade the version to simulate stale data
+    conn.execute(
+        "UPDATE shot_events SET event_schema_version = 'v1' WHERE game_id = ?",
+        (2023020001,),
+    )
+    conn.commit()
+    assert game_has_current_shot_events(conn, 2023020001) is False
+    # But game_has_shot_events still returns True (rows exist)
+    assert game_has_shot_events(conn, 2023020001) is True
+
+
+def test_game_has_current_shot_events_false_when_empty(conn):
+    ensure_xg_schema(conn)
+    assert game_has_current_shot_events(conn, 2023020001) is False
+
+
+# ── Phase 1: delete_game_shot_events ──────────────────────────────────
+
+
+def test_delete_game_shot_events_removes_rows(conn):
+    ensure_xg_schema(conn)
+    events = [
+        {
+            "game_id": 2023020001,
+            "event_idx": i,
+            "period": 1,
+            "time_in_period": "10:00",
+            "time_remaining_seconds": 600,
+            "shot_type": "wrist",
+            "is_goal": 0,
+            "shooting_team_id": 10,
+        }
+        for i in range(3)
+    ]
+    insert_shot_events(conn, events)
+    assert game_has_shot_events(conn, 2023020001) is True
+
+    delete_game_shot_events(conn, 2023020001)
+    assert game_has_shot_events(conn, 2023020001) is False
+
+
+def test_delete_game_shot_events_only_deletes_target_game(conn):
+    ensure_xg_schema(conn)
+    event_a = {
+        "game_id": 2023020001,
+        "event_idx": 1,
+        "period": 1,
+        "time_in_period": "10:00",
+        "time_remaining_seconds": 600,
+        "shot_type": "wrist",
+        "is_goal": 0,
+        "shooting_team_id": 10,
+    }
+    event_b = {
+        "game_id": 2023020002,
+        "event_idx": 1,
+        "period": 1,
+        "time_in_period": "10:00",
+        "time_remaining_seconds": 600,
+        "shot_type": "wrist",
+        "is_goal": 0,
+        "shooting_team_id": 10,
+    }
+    insert_shot_events(conn, [event_a, event_b])
+
+    delete_game_shot_events(conn, 2023020001)
+    assert game_has_shot_events(conn, 2023020001) is False
+    assert game_has_shot_events(conn, 2023020002) is True
