@@ -20,9 +20,30 @@ NHL Play-by-Play (PXP) scraper with a normalized player analytics schema. Raw ev
 ├── docs/
 │   ├── xg_model_roadmap.md         # xG model development roadmap (main plan)
 │   └── xg_model_components/        # Detailed component design docs
+├── knowledge_base/                 # LLM Knowledge Base (domain knowledge wiki)
+│   ├── SCHEMA.md                   # Wiki governance: article format, workflows, conventions
+│   ├── index.md                    # Content catalog (updated on every ingest)
+│   ├── log.md                      # Append-only chronological operations log
+│   ├── raw/                        # Immutable source documents (external + project refs)
+│   └── wiki/                       # LLM-maintained articles (concepts, methods, data, models)
 ├── README.md                       # Project documentation
 └── requirements.txt                # Dependencies
 ```
+
+## Knowledge Base
+
+The `knowledge_base/` directory contains a structured domain-knowledge wiki for NHL analytics concepts, methods, and data sources, following the [Karpathy LLM Knowledge Base](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) architecture. It is governed by `knowledge_base/SCHEMA.md`.
+
+**Relationship to other project documents:**
+- The wiki is complementary to `docs/` (implementation planning) and does not replace it.
+- `docs/` answers "how are we going to build this?" — the wiki answers "what is this concept and why does it matter?"
+- Wiki articles may reference `docs/`, `notebooks/`, and `src/` but the direction is wiki → project, not the reverse.
+
+**When to consult the wiki:**
+- Before making model design decisions, check relevant concept and method articles for domain context.
+- When adding a new feature or analysis, check whether the wiki has an article on the underlying concept.
+
+**Wiki maintenance operations** (ingest, lint) follow the workflows specified in `knowledge_base/SCHEMA.md` and must be logged in `knowledge_base/log.md`.
 
 ## Database Path Constants
 
