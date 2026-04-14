@@ -8,6 +8,8 @@ from database import (create_table, insert_data, create_connection,
                       fix_incomplete_collection_log,
                       deduplicate_existing_tables,
                       ensure_xg_schema, game_has_shot_events,
+                      game_has_current_shot_events,
+                      delete_game_shot_events,
                       insert_shot_events, game_has_metadata,
                       upsert_game_metadata, upsert_team,
                       ensure_player_database_schema,
@@ -32,10 +34,10 @@ def _init_database():
 
 
 def _game_is_complete(conn, game_id):
-    """Return True when raw events, metadata, and shot events all exist."""
+    """Return True when raw events, metadata, and current-version shot events all exist."""
     return (is_game_collected(conn, game_id)
             and game_has_metadata(conn, game_id)
-            and game_has_shot_events(conn, game_id))
+            and game_has_current_shot_events(conn, game_id))
 
 
 def _process_game(conn, game_id):
@@ -46,16 +48,16 @@ def _process_game(conn, game_id):
     """
     raw_present = is_game_collected(conn, game_id)
     meta_present = game_has_metadata(conn, game_id)
-    shots_present = game_has_shot_events(conn, game_id)
+    shots_current = game_has_current_shot_events(conn, game_id)
 
-    if raw_present and meta_present and shots_present:
+    if raw_present and meta_present and shots_current:
         return True
 
     if raw_present:
         missing = []
         if not meta_present:
             missing.append("metadata")
-        if not shots_present:
+        if not shots_current:
             missing.append("shot events")
         print(f"Backfilling game {game_id} ({', '.join(missing)})")
 
@@ -97,7 +99,9 @@ def _process_game(conn, game_id):
             )
             populate_game_context(conn, game_id)
 
-    if not shots_present:
+    if not shots_current:
+        if game_has_shot_events(conn, game_id):
+            delete_game_shot_events(conn, game_id)
         shot_events = extract_shot_events(full_data)
         if shot_events:
             insert_shot_events(conn, shot_events)
