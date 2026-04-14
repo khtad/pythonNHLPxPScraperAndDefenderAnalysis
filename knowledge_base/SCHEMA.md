@@ -169,3 +169,24 @@ Periodic health checks. Run before each new development phase and after any batc
 - Articles with no Revision History update in > 6 months are flagged during lint.
 - Flagged articles are reviewed and either updated or marked with a staleness acknowledgment in their Revision History.
 - When project code changes affect a wiki article's claims (e.g., a schema version bump, a new feature added), the article should be updated in the same PR or the next maintenance pass.
+
+### Data-Version Dependency Tracking
+
+Articles that contain empirical data derived from the database (frequency counts, goal rates, distribution statistics, diagnostic results) must declare their data dependency using an HTML comment at the top of the article, immediately after the title and summary:
+
+```markdown
+<!-- data-version: v2 -->
+<!-- data-revalidate: Rerun frequency queries after v3 backfill completes -->
+```
+
+**Fields:**
+- `data-version`: The `_XG_EVENT_SCHEMA_VERSION` that the article's empirical data was computed against. Articles with only static reference data or code-derived definitions (enums, formulas) omit this tag.
+- `data-revalidate`: A plain-language description of what must be rerun when the data version changes. This tells the librarian LLM exactly what to do during the refresh pass.
+
+**Refresh workflow:** After a schema version bump and backfill:
+1. Grep all wiki articles for `<!-- data-version:` tags.
+2. Any article whose `data-version` does not match the current `_XG_EVENT_SCHEMA_VERSION` is flagged for refresh.
+3. For each flagged article, follow the `data-revalidate` instruction: rerun queries, update tables, update the `data-version` tag and Revision History.
+4. Log the refresh pass in `log.md` as a `REFRESH` entry.
+
+This ensures that empirical claims automatically propagate updates when the underlying data changes, without requiring the LLM to guess which articles are affected.
