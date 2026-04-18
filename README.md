@@ -38,6 +38,7 @@ notebooks/
   zone_start_signal.ipynb        Phase 2 Area 2: zone deployment context from faceoff zone codes
 docs/
   xg_model_roadmap.md              xG model development roadmap (main plan)
+  shift_level_data_analysis_roadmap.md  Shift-level roster decomposition roadmap
   xg_model_components/             Detailed component design docs (9 parts)
 ```
 
@@ -92,6 +93,15 @@ Pure Python functions (no DB or HTTP dependencies) for computing shot event feat
 - **Manpower state classification** — parses 4-digit situation codes into skater counts (5v5, 5v4, 4v5, etc.)
 - **Faceoff context** — seconds since last faceoff, faceoff zone code, recency bin (immediate / early / mid / late / steady_state), zone-recency interaction feature
 - **Rest and travel** — rest days between games, back-to-back flag, haversine travel distance, timezone delta
+
+
+### Shift-level roster decomposition foundation (Phase 1)
+
+The roster-change analysis scaffold now includes a working shift-level Phase 1 foundation:
+
+- `src/shifts.py` fetches and normalizes shift-chart rows into `ShiftRecord` objects and runs baseline quality checks.
+- `src/on_ice_builder.py` converts shifts into non-overlapping on-ice intervals and projects interval players onto shot-event on-ice slots (`home_on_ice_1..6`, `away_on_ice_1..6`).
+- The Phase 1 outputs support downstream QoT/QoC and RAPM feature phases.
 
 ## Arena reference data (`arena_reference.py`)
 

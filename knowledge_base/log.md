@@ -124,3 +124,12 @@
 - Updated `wiki/concepts/venue-scorekeeper-bias.md` — added Related Pages link to new article, revision history entry
 - Updated `index.md` — added methods entry, bumped last-updated date
 **Notes:** Rink drawing helpers (`draw_half_rink`, `draw_full_rink`) extracted from `notebooks/shot_distance_diagnostic.ipynb` into `src/rink_viz.py` with named constants for geometry and style. Added `plot_shots` scatter helper and `plot_shot_density` with three methods — hexbin recommended for full-dataset aggregates (fast, no kernel bleed past boards; auto-switches to log-scale above 50k points). New `event_map_gallery.ipynb` demonstrates aggregate-hexbin + per-period facet + random-game workflow using `get_random_game_id()`. No derived-data values changed; no schema version bump. Article has no empirical data tables, so no `data-version` tag. Total wiki: 22 articles (7 data + 7 concepts + 6 methods + 1 comparison + 1 meta).
+
+## 2026-04-18
+**Action:** Updated shift-level knowledge base status after Phase 1 scaffold execution
+
+**Files updated:**
+- `knowledge_base/wiki/concepts/quality-of-teammates-competition.md`
+
+**Notes:** Documented that shift ingestion and on-ice interval construction are now implemented and ready to feed QoT/QoC feature engineering phases.
+
