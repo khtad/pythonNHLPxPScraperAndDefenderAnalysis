@@ -10,7 +10,9 @@ from database import (
     create_collection_log_table,
     create_player_game_features_table,
     create_player_game_stats_table,
+    create_on_ice_intervals_table,
     create_shot_events_table,
+    create_shifts_table,
     create_table,
     ensure_player_database_schema,
     deduplicate_existing_tables,
@@ -546,3 +548,20 @@ def test_load_game_shots_empty_game(conn):
         home_team_id=1, away_team_id=2,
     )
     assert load_game_shots(conn, 802) == []
+
+
+def test_create_shifts_table_creates_expected_columns(conn):
+    create_shifts_table(conn)
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(shifts)")
+    cols = [row[1] for row in cur.fetchall()]
+    assert "shift_schema_version" in cols
+
+
+def test_create_on_ice_intervals_table_creates_expected_columns(conn):
+    create_on_ice_intervals_table(conn)
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(on_ice_intervals)")
+    cols = [row[1] for row in cur.fetchall()]
+    assert "home_skaters_json" in cols
+    assert "away_skaters_json" in cols

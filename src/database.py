@@ -19,8 +19,10 @@ _FEATURE_SET_VERSION = "v1"
 
 # ── xG Phase 0: schema versions ──────────────────────────────────────
 
-_XG_EVENT_SCHEMA_VERSION = "v3"
+_XG_EVENT_SCHEMA_VERSION = "v4"
 _XG_FEATURE_SCHEMA_VERSION = "v1"
+_SHIFT_SCHEMA_VERSION = "v1"
+_ON_ICE_SCHEMA_VERSION = "v1"
 
 # ── xG Phase 0: data-contract constants ──────────────────────────────
 
@@ -504,6 +506,18 @@ def create_shot_events_table(conn):
             manpower_state TEXT,
             seconds_since_faceoff INTEGER,
             faceoff_zone_code TEXT,
+            home_on_ice_1_player_id INTEGER,
+            home_on_ice_2_player_id INTEGER,
+            home_on_ice_3_player_id INTEGER,
+            home_on_ice_4_player_id INTEGER,
+            home_on_ice_5_player_id INTEGER,
+            home_on_ice_6_player_id INTEGER,
+            away_on_ice_1_player_id INTEGER,
+            away_on_ice_2_player_id INTEGER,
+            away_on_ice_3_player_id INTEGER,
+            away_on_ice_4_player_id INTEGER,
+            away_on_ice_5_player_id INTEGER,
+            away_on_ice_6_player_id INTEGER,
             event_schema_version TEXT NOT NULL DEFAULT '{_XG_EVENT_SCHEMA_VERSION}',
             UNIQUE(game_id, event_idx)
         )
@@ -559,6 +573,35 @@ def _migrate_shot_events_v1_to_v2(conn):
     conn.commit()
 
 
+_SHOT_EVENTS_ON_ICE_COLUMNS = (
+    "home_on_ice_1_player_id",
+    "home_on_ice_2_player_id",
+    "home_on_ice_3_player_id",
+    "home_on_ice_4_player_id",
+    "home_on_ice_5_player_id",
+    "home_on_ice_6_player_id",
+    "away_on_ice_1_player_id",
+    "away_on_ice_2_player_id",
+    "away_on_ice_3_player_id",
+    "away_on_ice_4_player_id",
+    "away_on_ice_5_player_id",
+    "away_on_ice_6_player_id",
+)
+
+
+def _migrate_shot_events_v3_to_v4(conn):
+    """Add on-ice player slots used by roster-change decomposition phases."""
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(shot_events)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    for column_name in _SHOT_EVENTS_ON_ICE_COLUMNS:
+        if column_name not in existing_cols:
+            cursor.execute(
+                f"ALTER TABLE shot_events ADD COLUMN {_quote_identifier(column_name)} INTEGER"
+            )
+    conn.commit()
+
+
 _SHOT_EVENTS_INSERT_COLUMNS = (
     "game_id", "event_idx", "period", "time_in_period",
     "time_remaining_seconds", "shot_type", "x_coord", "y_coord",
@@ -566,6 +609,12 @@ _SHOT_EVENTS_INSERT_COLUMNS = (
     "shooting_team_id", "goalie_id", "shooter_id",
     "score_state", "manpower_state",
     "seconds_since_faceoff", "faceoff_zone_code",
+    "home_on_ice_1_player_id", "home_on_ice_2_player_id",
+    "home_on_ice_3_player_id", "home_on_ice_4_player_id",
+    "home_on_ice_5_player_id", "home_on_ice_6_player_id",
+    "away_on_ice_1_player_id", "away_on_ice_2_player_id",
+    "away_on_ice_3_player_id", "away_on_ice_4_player_id",
+    "away_on_ice_5_player_id", "away_on_ice_6_player_id",
     "event_schema_version",
 )
 
@@ -820,6 +869,135 @@ def create_venue_bias_diagnostics_table(conn):
     conn.commit()
 
 
+def create_shifts_table(conn):
+    """Create raw shift table used for on-ice reconstruction."""
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS shifts (
+            game_id INTEGER NOT NULL,
+            player_id INTEGER NOT NULL,
+            period INTEGER NOT NULL,
+            start_seconds INTEGER NOT NULL,
+            end_seconds INTEGER NOT NULL,
+            shift_schema_version TEXT NOT NULL DEFAULT '{_SHIFT_SCHEMA_VERSION}',
+            PRIMARY KEY (game_id, player_id, period, start_seconds, end_seconds)
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_shifts_game_period "
+        "ON shifts(game_id, period)"
+    )
+    conn.commit()
+
+
+def create_on_ice_intervals_table(conn):
+    """Create normalized on-ice interval table."""
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS on_ice_intervals (
+            game_id INTEGER NOT NULL,
+            period INTEGER NOT NULL,
+            start_s INTEGER NOT NULL,
+            end_s INTEGER NOT NULL,
+            home_skaters_json TEXT NOT NULL,
+            away_skaters_json TEXT NOT NULL,
+            home_goalie_player_id INTEGER,
+            away_goalie_player_id INTEGER,
+            strength_state TEXT,
+            on_ice_schema_version TEXT NOT NULL DEFAULT '{_ON_ICE_SCHEMA_VERSION}',
+            PRIMARY KEY (game_id, period, start_s, end_s)
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_on_ice_intervals_game_period "
+        "ON on_ice_intervals(game_id, period)"
+    )
+    conn.commit()
+
+
+def create_player_team_history_table(conn):
+    """Create transaction ledger table for team history."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS player_team_history (
+            player_id INTEGER NOT NULL,
+            team_id INTEGER NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT,
+            reason TEXT NOT NULL,
+            PRIMARY KEY (player_id, team_id, start_date)
+        )
+        """
+    )
+    conn.commit()
+
+
+def create_player_absences_table(conn):
+    """Create absence spells table."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS player_absences (
+            player_id INTEGER NOT NULL,
+            team_id INTEGER NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT,
+            reason TEXT NOT NULL,
+            source TEXT,
+            PRIMARY KEY (player_id, team_id, start_date, reason)
+        )
+        """
+    )
+    conn.commit()
+
+
+def create_shift_quality_features_table(conn):
+    """Create shift-level QoT/QoC features table."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shift_quality_features (
+            game_id INTEGER NOT NULL,
+            period INTEGER NOT NULL,
+            start_seconds INTEGER NOT NULL,
+            end_seconds INTEGER NOT NULL,
+            focal_player_id INTEGER NOT NULL,
+            qot_off REAL,
+            qot_def REAL,
+            qoc_off REAL,
+            qoc_def REAL,
+            PRIMARY KEY (game_id, period, start_seconds, end_seconds, focal_player_id)
+        )
+        """
+    )
+    conn.commit()
+
+
+def create_rapm_player_ratings_table(conn):
+    """Create season-level RAPM ratings table."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS rapm_player_ratings (
+            season TEXT NOT NULL,
+            player_id INTEGER NOT NULL,
+            rapm_off REAL,
+            rapm_def REAL,
+            rapm_off_se REAL,
+            rapm_def_se REAL,
+            model_version TEXT NOT NULL,
+            PRIMARY KEY (season, player_id, model_version)
+        )
+        """
+    )
+    conn.commit()
+
+
 def _migrate_games_add_venue_columns(conn):
     """Add venue_name, venue_city, venue_utc_offset columns to games if missing."""
     cursor = conn.cursor()
@@ -1034,9 +1212,16 @@ def _stddev(values, mean):
 def ensure_xg_schema(conn):
     create_shot_events_table(conn)
     _migrate_shot_events_v1_to_v2(conn)
+    _migrate_shot_events_v3_to_v4(conn)
     _migrate_games_add_venue_columns(conn)
     create_game_context_table(conn)
     create_venue_bias_diagnostics_table(conn)
+    create_shifts_table(conn)
+    create_on_ice_intervals_table(conn)
+    create_player_team_history_table(conn)
+    create_player_absences_table(conn)
+    create_shift_quality_features_table(conn)
+    create_rapm_player_ratings_table(conn)
 
 
 def create_connection(database_file):
