@@ -329,8 +329,8 @@ def test_valid_manpower_states_contains_pulled_goalie_states():
     assert required.issubset(set(VALID_MANPOWER_STATES))
 
 
-def test_xg_event_schema_version_is_v3():
-    assert _XG_EVENT_SCHEMA_VERSION == "v3"
+def test_xg_event_schema_version_is_v4():
+    assert _XG_EVENT_SCHEMA_VERSION == "v4"
 
 
 # ── Phase 1: migration ────────────────────────────────────────────────
