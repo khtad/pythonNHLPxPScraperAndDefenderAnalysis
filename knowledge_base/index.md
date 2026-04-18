@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-04-08 (Phase 2 external source ingestion)
+> Last updated: 2026-04-18 (Rink event visualization methods article)
 
 ## Concepts
 
@@ -19,6 +19,7 @@
 - [Bootstrapping and Confidence Intervals](wiki/methods/bootstrapping-confidence-intervals.md) — Bootstrap CIs for goal rates, Wilson intervals, and sample size adequacy checks at ~8% base rate.
 - [RAPM (Regularized Adjusted Plus-Minus)](wiki/methods/rapm-regularized-adjusted-plus-minus.md) — Ridge/elastic-net regression to isolate individual player impact from on-ice context using xG residuals.
 - [Effect Size Measures](wiki/methods/effect-size-measures.md) — Cohen's h/d for practical vs statistical significance, with decision rules for this project.
+- [Rink Event Visualization](wiki/methods/rink-event-visualization.md) — How to overlay NHL shot events on a rink surface for visual-reasoning debugging: drawing functions, density-estimation tradeoffs, and per-game inspection patterns.
 
 ## Data
 

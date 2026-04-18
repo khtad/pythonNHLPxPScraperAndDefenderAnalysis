@@ -71,8 +71,10 @@ Last verified: 2026-04-06
 - [Arena and Venue Reference](../data/arena-venue-reference.md) — the static venue data used for venue identification
 - [Expected Goals (xG)](expected-goals-xg.md) — the model that venue bias corrections feed into
 - [Public xG Model Survey](../comparisons/public-xg-model-survey.md) — how public models handle venue/rink bias
+- [Rink Event Visualization](../methods/rink-event-visualization.md) — plotting venue shot distributions on a rink surface for visual bias detection
 
 ## Revision History
 
+- 2026-04-18 — Added cross-link to new Rink Event Visualization methods article.
 - 2026-04-08 — Added Schuckers CDF-matching rink bias correction method and link to public model survey.
 - 2026-04-06 — Created. Compiled from venue bias notebook and component 04 design doc.

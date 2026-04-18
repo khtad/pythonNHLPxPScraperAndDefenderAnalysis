@@ -4,20 +4,26 @@ from datetime import date
 import pytest
 
 from database import (
+    _XG_EVENT_SCHEMA_VERSION,
     _quote_identifier,
     create_core_dimension_tables,
     create_collection_log_table,
     create_player_game_features_table,
     create_player_game_stats_table,
+    create_shot_events_table,
     create_table,
     ensure_player_database_schema,
     deduplicate_existing_tables,
     fix_incomplete_collection_log,
     get_last_collected_date,
+    get_random_game_id,
     insert_data,
+    insert_shot_events,
     is_date_range_collected,
     is_game_collected,
+    load_game_shots,
     mark_date_collected,
+    upsert_game_metadata,
     validate_player_game_stats_quality,
 )
 
@@ -412,3 +418,131 @@ def test_fix_incomplete_collection_log_clears_bad_completed_at(conn):
 
     cur.execute("SELECT completed_at FROM collection_log WHERE date='2024-03-02'")
     assert cur.fetchone()[0] is not None
+
+
+# ── get_random_game_id / load_game_shots fixtures ────────────────────────────
+
+
+def _shot_dict(game_id, event_idx, version=None, **overrides):
+    base = {
+        "game_id": game_id,
+        "event_idx": event_idx,
+        "period": 1,
+        "time_in_period": "10:00",
+        "time_remaining_seconds": 1200,
+        "shot_type": "wrist",
+        "x_coord": 60.0,
+        "y_coord": 5.0,
+        "distance_to_goal": 30.0,
+        "angle_to_goal": 10.0,
+        "is_goal": 0,
+        "shooting_team_id": 1,
+    }
+    base.update(overrides)
+    if version is not None:
+        base["event_schema_version"] = version
+    return base
+
+
+def _seed_game(conn, game_id, season, n_shots, version=None, event_idx_start=0):
+    upsert_game_metadata(
+        conn, game_id, game_date=f"{season[:4]}-10-15", season=season,
+        home_team_id=1, away_team_id=2, venue_name=f"Arena_{game_id}",
+    )
+    shots = [
+        _shot_dict(game_id, event_idx_start + i, version=version)
+        for i in range(n_shots)
+    ]
+    insert_shot_events(conn, shots)
+
+
+def _seed_game_env(conn):
+    create_core_dimension_tables(conn)
+    create_shot_events_table(conn)
+
+
+def test_get_random_game_id_returns_none_when_empty(conn):
+    _seed_game_env(conn)
+    assert get_random_game_id(conn) is None
+
+
+def test_get_random_game_id_respects_min_shots(conn):
+    _seed_game_env(conn)
+    _seed_game(conn, 100, "20232024", n_shots=1)
+    _seed_game(conn, 200, "20232024", n_shots=10)
+    for seed in range(5):
+        assert get_random_game_id(conn, min_shots=5, seed=seed) == 200
+
+
+def test_get_random_game_id_respects_season(conn):
+    _seed_game_env(conn)
+    _seed_game(conn, 300, "20222023", n_shots=10)
+    _seed_game(conn, 400, "20232024", n_shots=10)
+    for seed in range(5):
+        assert get_random_game_id(conn, season="20232024", seed=seed) == 400
+
+
+def test_get_random_game_id_is_reproducible_with_seed(conn):
+    _seed_game_env(conn)
+    for gid in range(500, 510):
+        _seed_game(conn, gid, "20232024", n_shots=5)
+    first = get_random_game_id(conn, seed=42)
+    second = get_random_game_id(conn, seed=42)
+    assert first == second
+    assert first is not None
+
+
+def test_get_random_game_id_requires_current_schema_version(conn):
+    _seed_game_env(conn)
+    _seed_game(conn, 600, "20232024", n_shots=10, version="v2")
+    assert get_random_game_id(conn) is None
+    # Sanity: a current-version game IS returned.
+    _seed_game(conn, 601, "20232024", n_shots=10)
+    assert get_random_game_id(conn) == 601
+
+
+def test_get_random_game_id_season_accepts_int(conn):
+    _seed_game_env(conn)
+    _seed_game(conn, 700, "20232024", n_shots=5)
+    assert get_random_game_id(conn, season=20232024, seed=0) == 700
+
+
+def test_load_game_shots_returns_rows_ordered_by_event_idx(conn):
+    _seed_game_env(conn)
+    upsert_game_metadata(
+        conn, 800, game_date="2023-10-15", season="20232024",
+        home_team_id=1, away_team_id=2, venue_name="TestArena",
+    )
+    insert_shot_events(conn, [
+        _shot_dict(800, 5),
+        _shot_dict(800, 1),
+        _shot_dict(800, 3),
+    ])
+    shots = load_game_shots(conn, 800)
+    assert [s["event_idx"] for s in shots] == [1, 3, 5]
+
+
+def test_load_game_shots_joins_game_metadata(conn):
+    _seed_game_env(conn)
+    upsert_game_metadata(
+        conn, 801, game_date="2023-10-15", season="20232024",
+        home_team_id=10, away_team_id=20, venue_name="VerifyArena",
+    )
+    insert_shot_events(conn, [_shot_dict(801, 1)])
+    shots = load_game_shots(conn, 801)
+    assert len(shots) == 1
+    row = shots[0]
+    assert row["game_date"] == "2023-10-15"
+    assert row["season"] == "20232024"
+    assert row["home_team_id"] == 10
+    assert row["away_team_id"] == 20
+    assert row["venue_name"] == "VerifyArena"
+
+
+def test_load_game_shots_empty_game(conn):
+    _seed_game_env(conn)
+    upsert_game_metadata(
+        conn, 802, game_date="2023-10-15", season="20232024",
+        home_team_id=1, away_team_id=2,
+    )
+    assert load_game_shots(conn, 802) == []

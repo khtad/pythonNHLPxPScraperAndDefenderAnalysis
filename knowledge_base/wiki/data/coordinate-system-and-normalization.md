@@ -101,7 +101,9 @@ Last verified: 2026-04-06
 
 - [NHL API Shot Events](nhl-api-shot-events.md)
 - [NHL API Endpoints](nhl-api-endpoints.md) — the play-by-play endpoint that provides coordinates and `homeTeamDefendingSide`
+- [Rink Event Visualization](../methods/rink-event-visualization.md) — how to plot normalized coordinates on a rink surface for visual-reasoning debugging
 
 ## Revision History
 
+- 2026-04-18 — Added cross-link to new Rink Event Visualization methods article.
 - 2026-04-06 — Created. Compiled from xg_features.py normalization logic, database.py validation bounds, and shot distance diagnostic notebook findings.
