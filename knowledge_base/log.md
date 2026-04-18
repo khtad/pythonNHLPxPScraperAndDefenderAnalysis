@@ -113,3 +113,14 @@
 - Created `wiki/meta/knowledge-gaps.md` — 7 uncovered concepts, 2 empty categories, 12 articles pending v3 refresh, 5 candidate external sources, 2 component docs without wiki coverage
 - Updated `index.md` — added meta article, updated last-updated date
 **Notes:** Completes Phase 1 of the knowledge base implementation plan. All four sub-phases done: 1A (7 data articles), 1B (7 concept articles), 1C (5 methods articles), 1D (1 meta article). Total wiki: 20 articles. Next phase is Phase 2 (external source ingestion) — gated on user providing or approving external sources for ingest.
+
+### 2026-04-18 — INGEST
+
+**Action:** Added rink event-map visualization utilities and documented the method
+**Source:** `src/rink_viz.py`, `src/database.py` (`load_game_shots`, `get_random_game_id`), `notebooks/event_map_gallery.ipynb`, `notebooks/shot_distance_diagnostic.ipynb` refactor
+**Pages touched:**
+- Created `wiki/methods/rink-event-visualization.md` — new methods article covering drawing functions, hexbin/heatmap/KDE density tradeoffs, and per-game inspection patterns
+- Updated `wiki/data/coordinate-system-and-normalization.md` — added Related Pages link to new article, revision history entry
+- Updated `wiki/concepts/venue-scorekeeper-bias.md` — added Related Pages link to new article, revision history entry
+- Updated `index.md` — added methods entry, bumped last-updated date
+**Notes:** Rink drawing helpers (`draw_half_rink`, `draw_full_rink`) extracted from `notebooks/shot_distance_diagnostic.ipynb` into `src/rink_viz.py` with named constants for geometry and style. Added `plot_shots` scatter helper and `plot_shot_density` with three methods — hexbin recommended for full-dataset aggregates (fast, no kernel bleed past boards; auto-switches to log-scale above 50k points). New `event_map_gallery.ipynb` demonstrates aggregate-hexbin + per-period facet + random-game workflow using `get_random_game_id()`. No derived-data values changed; no schema version bump. Article has no empirical data tables, so no `data-version` tag. Total wiki: 22 articles (7 data + 7 concepts + 6 methods + 1 comparison + 1 meta).

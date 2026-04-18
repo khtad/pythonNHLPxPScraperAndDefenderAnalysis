@@ -1,6 +1,7 @@
 # database.py
 
 import os
+import random
 import re
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -116,6 +117,79 @@ def get_collected_game_ids(conn):
         if _is_raw_game_table_name(table_name):
             game_ids.append(int(table_name[_GAME_ID_SUFFIX_START:]))
     return game_ids
+
+
+def load_game_shots(conn, game_id):
+    """Return all shots for game_id as a list of dicts, ordered by event_idx.
+
+    Each dict contains every shot_events column plus game_date, season,
+    home_team_id, away_team_id, and venue_name from the games dimension.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT se.*,
+                  g.game_date, g.season,
+                  g.home_team_id, g.away_team_id, g.venue_name
+           FROM shot_events se
+           JOIN games g ON se.game_id = g.game_id
+           WHERE se.game_id = ?
+           ORDER BY se.event_idx""",
+        (game_id,),
+    )
+    columns = [desc[0] for desc in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def _eligible_random_games_sql(include_season_filter):
+    season_clause = "AND g.season = ?" if include_season_filter else ""
+    return f"""
+        SELECT g.game_id FROM games g
+        WHERE (
+            SELECT COUNT(*) FROM shot_events se
+            WHERE se.game_id = g.game_id
+              AND se.event_schema_version = ?
+        ) >= ?
+        {season_clause}
+    """
+
+
+def get_random_game_id(conn, season=None, min_shots=1, seed=None):
+    """Return a random game_id whose shots are at the current schema version.
+
+    season: optional season filter (coerced via str()).
+    min_shots: minimum shot_events rows at the current schema version
+        required for a game to be eligible.
+    seed: when set, picks a deterministic offset via a local random.Random
+        so multiple calls with the same seed return the same game_id.
+    Returns None when no game meets the criteria.
+    """
+    cursor = conn.cursor()
+    season_filter = str(season) if season is not None else None
+    has_season = season_filter is not None
+
+    eligible_sql = _eligible_random_games_sql(has_season)
+    params = [_XG_EVENT_SCHEMA_VERSION, min_shots]
+    if has_season:
+        params.append(season_filter)
+
+    if seed is None:
+        cursor.execute(eligible_sql + " ORDER BY RANDOM() LIMIT 1", params)
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    count_sql = f"SELECT COUNT(*) FROM ({eligible_sql})"
+    cursor.execute(count_sql, params)
+    (n_candidates,) = cursor.fetchone()
+    if n_candidates == 0:
+        return None
+
+    rng = random.Random(seed)
+    offset = rng.randrange(n_candidates)
+    cursor.execute(
+        eligible_sql + " ORDER BY g.game_id LIMIT 1 OFFSET ?", params + [offset]
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
 
 
 def create_table(conn, game_id):
