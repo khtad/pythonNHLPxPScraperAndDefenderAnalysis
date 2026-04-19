@@ -55,15 +55,18 @@ Venue bias is distinct from the coordinate normalization issue (see [Coordinate 
 
 Venue bias estimation is Phase 2, Component 04 [2]. The analysis notebook `notebooks/venue_bias_analysis.ipynb` implements detection [1]. Correction features are planned but not yet implemented.
 
+Phase 2 also wired the per-season diagnostic populator into the scraper pipeline: `finalize_season_diagnostics(conn)` in `src/main.py` iterates every season in `games` and calls `populate_venue_diagnostics(conn, season)` at the end of both the scrape loop and `backfill_missing_game_data()` [4]. The populator is idempotent (`INSERT OR REPLACE`), so the `venue_bias_diagnostics` table now fills automatically and stays current as new seasons land. Before this wiring, the populator existed but was never invoked, so the diagnostic table was empty on the live DB. Consumers of venue bias features should read from `venue_bias_diagnostics` rather than recomputing per-season.
+
 The venue bias analysis is particularly sensitive to the v2 coordinate normalization bug. Pre-2020 data with ~50% unnormalized coordinates will produce spurious venue effects that are actually normalization failures. This analysis should be re-derived after the v3 backfill completes.
 
-Last verified: 2026-04-06
+Last verified: 2026-04-19
 
 ## Sources
 
 [1] Venue bias analysis — `notebooks/venue_bias_analysis.ipynb`
 [2] Component design — `docs/xg_model_components/04_scorekeeper_bias.md`
 [3] Schuckers & Curro rink bias correction — `knowledge_base/raw/external/2026-04-08_schuckers-curro-thor-digr.md`
+[4] Diagnostic populator wiring — `src/main.py` (`finalize_season_diagnostics()`), `src/database.py` (`populate_venue_diagnostics()`)
 
 ## Related Pages
 
@@ -75,6 +78,7 @@ Last verified: 2026-04-06
 
 ## Revision History
 
+- 2026-04-19 — Documented that Phase 2 wired `finalize_season_diagnostics` into the pipeline, so `venue_bias_diagnostics` is now populated on every scrape/backfill run. Source [4] added.
 - 2026-04-18 — Added cross-link to new Rink Event Visualization methods article.
 - 2026-04-08 — Added Schuckers CDF-matching rink bias correction method and link to public model survey.
 - 2026-04-06 — Created. Compiled from venue bias notebook and component 04 design doc.
