@@ -14,6 +14,7 @@ from database import (create_table, insert_data, create_connection,
                       upsert_game_metadata, upsert_team,
                       ensure_player_database_schema,
                       populate_game_context,
+                      populate_venue_diagnostics,
                       get_collected_game_ids,
                       DATABASE_DIR, DATABASE_PATH)
 from xg_features import extract_shot_events, extract_game_metadata
@@ -109,6 +110,24 @@ def _process_game(conn, game_id):
     return True
 
 
+def finalize_season_diagnostics(conn):
+    """Populate `venue_bias_diagnostics` for every season present in `games`.
+
+    Runs after the scraper/backfill loop. Safe to re-run: the underlying
+    `populate_venue_diagnostics` uses `INSERT OR REPLACE`.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT DISTINCT season FROM games "
+        "WHERE season IS NOT NULL ORDER BY season"
+    )
+    seasons = [row[0] for row in cursor.fetchall()]
+    for season in seasons:
+        populate_venue_diagnostics(conn, season)
+    print(f"Populated venue diagnostics for {len(seasons)} seasons")
+    return len(seasons)
+
+
 def backfill_missing_game_data(limit=None):
     """Backfill metadata and shot events for already-collected raw games."""
     conn = _init_database()
@@ -126,6 +145,8 @@ def backfill_missing_game_data(limit=None):
     for game_id in missing_game_ids:
         if _process_game(conn, game_id):
             processed_games += 1
+
+    finalize_season_diagnostics(conn)
 
     conn.close()
     print(f"Finished backfill for {processed_games} games")
@@ -175,6 +196,8 @@ def main():
         if not next_start_date:
             break
         current_date = datetime.date.fromisoformat(next_start_date)
+
+    finalize_season_diagnostics(conn)
 
     conn.close()
 

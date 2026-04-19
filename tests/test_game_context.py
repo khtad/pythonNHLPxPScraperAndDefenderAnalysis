@@ -18,6 +18,7 @@ from database import (
     compute_venue_season_stats,
     compute_league_season_stats,
     populate_venue_diagnostics,
+    validate_game_context_quality,
     _migrate_games_add_venue_columns,
     _stddev,
 )
@@ -391,3 +392,60 @@ def test_ensure_xg_schema_creates_all_phase2_tables():
     assert "game_context" in tables
     assert "venue_bias_diagnostics" in tables
     connection.close()
+
+
+# ── validate_game_context_quality ───────────────────────────────────
+
+
+def test_validate_game_context_quality_empty(conn):
+    result = validate_game_context_quality(conn)
+    assert result["total_rows"] == 0
+    assert result["orphan_game_rows"] == 0
+    for key in result:
+        if key.startswith("null_"):
+            assert result[key] == 0
+
+
+def _seed_two_game_series(conn):
+    upsert_team(conn, 10, "TOR", "Toronto")
+    upsert_team(conn, 8, "MTL", "Montreal")
+    upsert_team(conn, 20, "NYR", "New York Rangers")
+    upsert_game_metadata(conn, 2024020001, "2024-10-08", 20242025, 10, 8)
+    upsert_game_metadata(conn, 2024020050, "2024-10-15", 20242025, 10, 20)
+    populate_game_context(conn, 2024020001)
+    populate_game_context(conn, 2024020050)
+
+
+def test_validate_game_context_quality_flags_first_game_as_structural(conn):
+    _seed_two_game_series(conn)
+    result = validate_game_context_quality(conn)
+    assert result["total_rows"] == 2
+    assert result["orphan_game_rows"] == 0
+    assert result["structural_null_rest_rows"] == 1
+    assert result["null_home_rest_days_rows"] >= 1
+
+
+def test_validate_game_context_quality_detects_orphans(conn):
+    _seed_two_game_series(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO game_context
+           (game_id, home_rest_days, away_rest_days, rest_advantage,
+            home_is_back_to_back, away_is_back_to_back,
+            travel_distance_km, timezone_delta, context_schema_version)
+           VALUES (9999999999, 2, 1, 1, 0, 0, 500.0, 0.0, ?)""",
+        (_GAME_CONTEXT_SCHEMA_VERSION,),
+    )
+    conn.commit()
+    result = validate_game_context_quality(conn)
+    assert result["orphan_game_rows"] == 1
+
+
+def test_validate_game_context_quality_counts_travel_nulls(conn):
+    upsert_team(conn, 10, "TOR", "Toronto")
+    upsert_team(conn, 99, "ZZZ", "No Arena Team")
+    upsert_game_metadata(conn, 2024020001, "2024-10-08", 20242025, 10, 99)
+    populate_game_context(conn, 2024020001)
+    result = validate_game_context_quality(conn)
+    assert result["null_travel_distance_km_rows"] == 1
+    assert result["null_timezone_delta_rows"] == 1

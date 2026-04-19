@@ -843,6 +843,79 @@ def populate_game_context(conn, game_id):
 
 
 # ── Phase 2, Area 4: venue bias diagnostics ─────────────────────────
+
+_GAME_CONTEXT_REST_COLUMNS = (
+    "home_rest_days",
+    "away_rest_days",
+    "rest_advantage",
+    "home_is_back_to_back",
+    "away_is_back_to_back",
+)
+_GAME_CONTEXT_TRAVEL_COLUMNS = ("travel_distance_km", "timezone_delta")
+
+
+def _count_nulls(cursor, table, column, where_sql="", where_params=()):
+    quoted = _quote_identifier(column)
+    sql = (
+        f"SELECT COUNT(*) FROM {_quote_identifier(table)} "
+        f"WHERE {quoted} IS NULL"
+    )
+    if where_sql:
+        sql += f" AND {where_sql}"
+    cursor.execute(sql, where_params)
+    return cursor.fetchone()[0]
+
+
+def validate_game_context_quality(conn):
+    """Count null-rate and orphan-row quality issues for `game_context`.
+
+    Rest-day nulls on the first game of each team's season are structural
+    and reported separately as `structural_null_rest_rows`. Travel and
+    timezone nulls reflect missing arena coverage and are always reported
+    as unexpected.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM game_context")
+    total_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        """SELECT COUNT(*) FROM game_context gc
+           LEFT JOIN games g ON g.game_id = gc.game_id
+           WHERE g.game_id IS NULL"""
+    )
+    orphan_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        """SELECT COUNT(*) FROM game_context gc
+           JOIN games g ON g.game_id = gc.game_id
+           WHERE NOT EXISTS (
+               SELECT 1 FROM games g2
+               WHERE g2.game_id != g.game_id
+                 AND g2.game_date < g.game_date
+                 AND (g2.home_team_id = g.home_team_id
+                      OR g2.away_team_id = g.home_team_id
+                      OR g2.home_team_id = g.away_team_id
+                      OR g2.away_team_id = g.away_team_id)
+           )"""
+    )
+    structural_null_rest_rows = cursor.fetchone()[0]
+
+    result = {
+        "total_rows": total_rows,
+        "orphan_game_rows": orphan_rows,
+        "structural_null_rest_rows": structural_null_rest_rows,
+    }
+    for column in _GAME_CONTEXT_REST_COLUMNS:
+        result[f"null_{column}_rows"] = _count_nulls(
+            cursor, "game_context", column
+        )
+    for column in _GAME_CONTEXT_TRAVEL_COLUMNS:
+        result[f"null_{column}_rows"] = _count_nulls(
+            cursor, "game_context", column
+        )
+    return result
+
+# ── Phase 2, Area 4: venue bias diagnostics ─────────────────────────
 
 
 def create_venue_bias_diagnostics_table(conn):
