@@ -157,10 +157,23 @@ These standards apply to every phase from 2.5 onward and are derived from the pr
 - Define training/inference data contracts and leakage guardrails.
 - Build validation checks for required columns and value ranges.
 
+Acceptance criteria (retrospective — phase complete):
+- Every derived table stamps the row-producing code version in a column: `shot_events.event_schema_version`, `game_context.context_schema_version`, `player_game_features.feature_set_version`. Version constants are single-sourced in `src/database.py` (`_XG_EVENT_SCHEMA_VERSION = "v3"`, `_GAME_CONTEXT_SCHEMA_VERSION = "v1"`).
+- Version-aware backfill is idempotent: `game_has_current_shot_events` checks both row existence and current version; `delete_game_shot_events` removes stale rows before `_process_game` re-inserts. Rerunning the scraper against an already-current DB performs no additional inserts.
+- 100% of live `shot_events` rows are at the current version (verified 2026-04-19: 2,099,820/2,099,820 at v3).
+- Quality validators (`validate_shot_events_quality`, `validate_player_game_stats_quality`) cover duplicate keys, enum domains, negative TOI, and value ranges and are exercised by `tests/`.
+
 ## Phase 1: Event/state foundation
 - Normalize shot coordinates and shot type taxonomy.
 - Build score-state, time-remaining, manpower-state labels.
 - Tag faceoffs and sequence boundaries.
+
+Acceptance criteria (retrospective — phase complete):
+- Coordinate normalization (`normalize_coordinates`, `src/xg_features.py:96-120`) produces a right-attacking-zone convention. Pre-2020 negative-x rate is 0.0 at v3 (was ~50% at v2); verified by live DB query.
+- Shot-type taxonomy collapses raw NHL `shotType` values into a 10-class vocabulary with complete coverage of `shot_events` (no `unknown`/`other` fallthrough for in-vocabulary values).
+- Score-state labels derive from a pre-event tracker (`_track_score`, `src/xg_features.py:136-157`) so a shot's `pre_event_score_diff` reflects the state at shot time, not after any goal that shot may produce. This is the project's primary leakage guardrail at Phase 1.
+- Manpower-state and time-remaining classifiers produce non-null labels for every row in `shot_events` (covered by quality validators).
+- Faceoff and sequence-boundary tagging captured in `faceoff_zone_code` on every row following a faceoff event within the same sequence window.
 
 ## Phase 2: Context feature engineering
 
