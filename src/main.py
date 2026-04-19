@@ -17,6 +17,7 @@ from database import (create_table, insert_data, create_connection,
                       get_collected_game_ids,
                       DATABASE_DIR, DATABASE_PATH)
 from xg_features import extract_shot_events, extract_game_metadata
+from backup import run_backup_cycle_safe
 
 NHL_FIRST_GAME_DATE = datetime.date(2007, 10, 3)  # earliest available game in NHL API
 
@@ -135,7 +136,9 @@ def backfill_missing_game_data(limit=None):
 def run_scraper_and_backfill(backfill_limit=None):
     """Run the scheduled scraper update, then backfill missing derived data."""
     main()
-    return backfill_missing_game_data(limit=backfill_limit)
+    processed = backfill_missing_game_data(limit=backfill_limit)
+    run_backup_cycle_safe()
+    return processed
 
 
 def main():
