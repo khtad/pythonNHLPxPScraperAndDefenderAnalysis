@@ -498,3 +498,40 @@ def test_run_scraper_and_backfill_calls_main_then_backfill(
     mock_main_fn.assert_called_once_with()
     mock_backfill.assert_called_once_with(limit=7)
     assert processed_games == 123
+
+
+def test_finalize_season_diagnostics_runs_per_season():
+    from database import upsert_team, upsert_game_metadata
+    conn = _in_memory_conn()
+    upsert_team(conn, 10, "TOR", "Toronto")
+    upsert_team(conn, 20, "MTL", "Montreal")
+    upsert_game_metadata(
+        conn, 2024020001, "2024-10-08", "20242025", 10, 20,
+        venue_name="Scotiabank Arena",
+    )
+    upsert_game_metadata(
+        conn, 2023020999, "2023-10-10", "20232024", 10, 20,
+        venue_name="Scotiabank Arena",
+    )
+
+    populated_seasons = main.finalize_season_diagnostics(conn)
+    assert populated_seasons == 2
+
+
+def test_finalize_season_diagnostics_idempotent():
+    from database import upsert_team, upsert_game_metadata
+    conn = _in_memory_conn()
+    upsert_team(conn, 10, "TOR", "Toronto")
+    upsert_team(conn, 20, "MTL", "Montreal")
+    upsert_game_metadata(
+        conn, 2024020001, "2024-10-08", "20242025", 10, 20,
+        venue_name="Scotiabank Arena",
+    )
+
+    main.finalize_season_diagnostics(conn)
+    main.finalize_season_diagnostics(conn)
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM venue_bias_diagnostics")
+    # INSERT OR REPLACE keyed on (venue_name, season) — no duplication.
+    assert cursor.fetchone()[0] <= 1
