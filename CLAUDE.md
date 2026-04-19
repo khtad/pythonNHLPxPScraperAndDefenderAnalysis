@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> **Note for non-Claude agents:** [`AGENTS.md`](./AGENTS.md) points here. This file is the authoritative source of project rules for every agent and model. If you are reading `AGENTS.md` first, continue here.
+
 ## Project Overview
 
 NHL Play-by-Play (PXP) scraper with a normalized player analytics schema. Raw events are scraped and stored per game, then aggregated into player/game fact and feature tables.
@@ -192,6 +194,7 @@ The validation framework notebook (`notebooks/model_validation_framework.ipynb`)
 - **Check conceptual PR scope before starting new work**: At the start of any new interaction, evaluate whether the requested work belongs in the same conceptual basket as the changes since the previous pull request. If it does not, stop before making code changes and ask the user how they want to handle the new chunk of work that would need to move through the PR process separately.
 - Keep SQL identifiers validated and quoted when dynamic.
 - **Validate all external input used in SQL**: Never interpolate raw strings into SQL — not even for column names. Values must use parameterized queries (`?` placeholders). Identifiers (table/column names) that originate from external input (API responses, user arguments, dict keys) must pass through `_quote_identifier`, which rejects anything that isn't `^\w+$`. If a function accepts a dict and uses its keys as column names, those keys must be validated or drawn from a known-safe allowlist before being spliced into the query string.
+- **No `#` comments in or adjacent to SQLite queries**: Do not place a `#` Python comment inside a SQL string literal (even inside triple-quoted SQL), on the line immediately preceding a SQL statement, or on the line immediately following a SQL statement. Security scanners flag `#`-adjacent-to-SQL as a suspicious pattern. Use `--` inside SQL for SQL-level comments, and place any Python `#` explanations at least one blank line away from the SQL call, or refactor the explanation into the surrounding function's docstring.
 - Prefer normalized schema additions over duplicating raw event rows.
 - Any new player feature should be derivable from `player_game_stats` and materialized into `player_game_features`.
 - **No magic numbers or strings**: Never use bare numeric or string literals inline. Always define a descriptively named constant (e.g., `_GAME_API_MIN_INTERVAL = 2`, `NHL_FIRST_GAME_DATE = datetime.date(2007, 10, 3)`) and reference that constant in code and tests.
