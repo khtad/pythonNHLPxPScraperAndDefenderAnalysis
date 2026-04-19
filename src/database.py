@@ -893,9 +893,14 @@ def validate_game_context_quality(conn):
                WHERE g2.game_id != g.game_id
                  AND g2.game_date < g.game_date
                  AND (g2.home_team_id = g.home_team_id
-                      OR g2.away_team_id = g.home_team_id
-                      OR g2.home_team_id = g.away_team_id
-                      OR g2.away_team_id = g.away_team_id)
+                      OR g2.away_team_id = g.home_team_id)
+           )
+              OR NOT EXISTS (
+               SELECT 1 FROM games g3
+               WHERE g3.game_id != g.game_id
+                 AND g3.game_date < g.game_date
+                 AND (g3.home_team_id = g.away_team_id
+                      OR g3.away_team_id = g.away_team_id)
            )"""
     )
     structural_null_rest_rows = cursor.fetchone()[0]
