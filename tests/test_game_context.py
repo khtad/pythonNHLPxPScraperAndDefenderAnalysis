@@ -421,8 +421,31 @@ def test_validate_game_context_quality_flags_first_game_as_structural(conn):
     result = validate_game_context_quality(conn)
     assert result["total_rows"] == 2
     assert result["orphan_game_rows"] == 0
-    assert result["structural_null_rest_rows"] == 1
+    # Game 1 (TOR vs MTL): both teams first-ever game → both rest cols null.
+    # Game 2 (TOR vs NYR): TOR has prior history, NYR first game → away rest null.
+    # Both rows are structural because at least one rest column is null by design.
+    assert result["structural_null_rest_rows"] == 2
     assert result["null_home_rest_days_rows"] >= 1
+    assert result["null_away_rest_days_rows"] >= 2
+
+
+def test_validate_game_context_quality_counts_partial_structural_null(conn):
+    """Row with one team having history and one team debuting must count
+    as structural — the predicate must not require *both* teams to lack
+    prior games."""
+    upsert_team(conn, 10, "TOR", "Toronto")
+    upsert_team(conn, 8, "MTL", "Montreal")
+    upsert_team(conn, 20, "NYR", "New York Rangers")
+    upsert_game_metadata(conn, 2024020001, "2024-10-08", 20242025, 10, 8)
+    upsert_game_metadata(conn, 2024020099, "2024-10-20", 20242025, 8, 20)
+    populate_game_context(conn, 2024020001)
+    populate_game_context(conn, 2024020099)
+
+    result = validate_game_context_quality(conn)
+    assert result["total_rows"] == 2
+    assert result["structural_null_rest_rows"] == 2
+    assert result["null_home_rest_days_rows"] == 1
+    assert result["null_away_rest_days_rows"] == 2
 
 
 def test_validate_game_context_quality_detects_orphans(conn):
