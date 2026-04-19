@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-04-18 (Rink event visualization methods article)
+> Last updated: 2026-04-19 (Phase 2 completion: rest-triple multicollinearity warning and venue diagnostics pipeline wiring)
 
 ## Concepts
 

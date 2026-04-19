@@ -133,3 +133,13 @@
 
 **Notes:** Documented that shift ingestion and on-ice interval construction are now implemented and ready to feed QoT/QoC feature engineering phases.
 
+### 2026-04-19 — UPDATE
+
+**Action:** Recorded Phase 2 completion and multicollinearity finding; governance entry for PRs #44–#47
+**Source:** `docs/xg_model_roadmap.md` (rigor-first rewrite, Phase 0/1 retroactive acceptance blocks, Phase 2 completion block), `src/stats_helpers.py`, `src/database.py` (`validate_game_context_quality`), `src/main.py` (`finalize_season_diagnostics`), live VIF analysis against `data/nhl_data.db`
+**Pages touched:**
+- Updated `wiki/concepts/rest-travel-effects.md` — added Multicollinearity Warning section (`rest_advantage = home_rest_days - away_rest_days` by construction → perfect linear dependence, VIF ∞ when all three included); recorded 1.07% non-structural travel/timezone null rate from `validate_game_context_quality` as Phase 2.5.5 work; added sources [5] and [6]; bumped last-verified date
+- Updated `wiki/concepts/venue-scorekeeper-bias.md` — documented that `finalize_season_diagnostics` is now wired into the pipeline, so `venue_bias_diagnostics` auto-populates on scrape and backfill (previously scaffolded but never invoked); added source [4]; bumped last-verified date
+- Updated `index.md` — bumped last-updated date
+**Notes:** Governance-only updates for PR #44 (rigor-first roadmap rewrite establishing the eight-point Statistical Analysis Rigor framework), PR #45 / PR #46 (retroactive acceptance blocks for Phases 0 and 1), and the substantive content from PR #47 (Phase 2 completion: venue diagnostics wiring, `game_context` validator, VIF helper with live findings). Phase 2's acceptance criteria (2) and (3) — held-out faceoff-decay validation and zone-start change-on-the-fly inference — are formally deferred to their gating dependencies (Phase 2.5.2 for validation helpers, shifts ingestion for zone-start). No new articles; no v3 coordinate dependencies affected. Wiki counts unchanged.
+
