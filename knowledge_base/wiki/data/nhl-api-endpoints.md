@@ -1,10 +1,10 @@
 # NHL API Endpoints
 
-> The two NHL Stats API endpoints used by this project — schedule and play-by-play — their response structure, rate limiting, and known field availability gaps by era.
+> The three NHL Stats API endpoints used by this project — schedule, play-by-play, and player landing — their response structure, rate limiting, and known field availability gaps by era.
 
 ## Overview
 
-This project fetches all data from the NHL Stats API (`api-web.nhle.com/v1`), a public JSON API that provides schedule information and detailed play-by-play event data for NHL games. The API requires no authentication but is rate-limited. Two endpoints are used: the weekly schedule endpoint to discover game IDs, and the play-by-play endpoint to fetch detailed event data for each game.
+This project fetches all data from the NHL Stats API (`api-web.nhle.com/v1`), a public JSON API that provides schedule information and detailed play-by-play event data for NHL games. The API requires no authentication but is rate-limited. Three endpoints are used: the weekly schedule endpoint to discover game IDs, the play-by-play endpoint to fetch detailed event data for each game, and the player landing endpoint to resolve per-player metadata (handedness, position, team).
 
 The API client is implemented in `src/nhl_api.py` using a module-level `requests.Session` for connection reuse, with a configurable minimum interval between game API calls to respect rate limits [1].
 
@@ -49,6 +49,28 @@ The play-by-play response contains the full event stream for a game. Key fields 
 | Shot type | `plays[].details.shotType` | Shot technique (see [Shot Type Taxonomy](shot-type-taxonomy.md)) |
 | Scores | `plays[].details.homeScore`, `awayScore` | Post-event scores (on goal events only) |
 
+### Player Landing Endpoint
+
+| Property | Value |
+|----------|-------|
+| URL pattern | `https://api-web.nhle.com/v1/player/{player_id}/landing` |
+| Method | GET |
+| Response keys | `playerId`, `firstName`, `lastName`, `shootsCatches`, `position`, `currentTeamId`, plus career-stats blocks not used by this project |
+| Rate limit | Not separately rate-limited; only called for ids missing from the `players` dimension [1] |
+
+Per-player fields consumed by the scraper:
+
+| Field | Path | Description |
+|-------|------|-------------|
+| Player id | `playerId` | NHL identifier (e.g., `8478402` for Connor McDavid) |
+| First name | `firstName.default` | Locale-keyed; project reads the `"default"` entry |
+| Last name | `lastName.default` | Locale-keyed; project reads the `"default"` entry |
+| Handedness | `shootsCatches` | `"L"` / `"R"` — shooting hand for skaters, catching hand for goalies |
+| Position | `position` | Raw NHL code: `C`, `L`, `R`, `D`, `G` |
+| Team id | `currentTeamId` | Current team, or null for unsigned/retired players |
+
+These are parsed by `_parse_player_landing()` and written by `upsert_player()` / `upsert_players()` in `src/database.py`. The backfill entry point (`backfill_player_metadata`) fetches only ids that appear as `shooter_id` or `goalie_id` in `shot_events` but are missing from the `players` table, so one run reaches every participating player without re-fetching known rows [5].
+
 ### Field Availability by Era
 
 Not all fields are available for all seasons. This is the most significant data quality issue for historical analysis [3].
@@ -78,7 +100,7 @@ A legacy API base URL (`https://statsapi.web.nhl.com/api/v1/`) was used by many 
 
 ## Relevance to This Project
 
-These two endpoints are the sole data source for the entire project. The scraper in `main.py` iterates through every week from 2007-10-03 to the present, fetching game IDs via the schedule endpoint and full event data via the play-by-play endpoint [2]. All derived tables (`shot_events`, `games`, `game_context`) are populated from play-by-play responses.
+These three endpoints are the sole data source for the entire project. The scraper in `main.py` iterates through every week from 2007-10-03 to the present, fetching game IDs via the schedule endpoint and full event data via the play-by-play endpoint [2]. The player landing endpoint is called after each scraper/backfill pass for every shooter/goalie not yet resolved. All derived tables (`shot_events`, `games`, `game_context`, `players`, `player_game_stats`) are populated from these endpoints [5].
 
 The `homeTeamDefendingSide` era gap is the project's most significant data quality issue, affecting ~1.3M shots (see [Coordinate System and Normalization](coordinate-system-and-normalization.md) for full details).
 
@@ -86,10 +108,11 @@ Last verified: 2026-04-06
 
 ## Sources
 
-[1] API client implementation — `src/nhl_api.py` (`_NHL_API_BASE_URL`, `_GAME_API_MIN_INTERVAL`, `get_weekly_schedule()`, `get_full_play_by_play()`, `_rate_limited_game_api_get()`)
-[2] Scraper entry point — `src/main.py` (`main()`, `NHL_FIRST_GAME_DATE`)
+[1] API client implementation — `src/nhl_api.py` (`_NHL_API_BASE_URL`, `_GAME_API_MIN_INTERVAL`, `get_weekly_schedule()`, `get_full_play_by_play()`, `_rate_limited_game_api_get()`, `get_player_metadata()`, `_parse_player_landing()`)
+[2] Scraper entry point — `src/main.py` (`main()`, `NHL_FIRST_GAME_DATE`, `refresh_player_tables()`)
 [3] Shot distance diagnostic — `knowledge_base/raw/project/2026-04-06_shot-distance-diagnostic.md`
 [4] Community API documentation — `knowledge_base/raw/external/2026-04-08_nhl-api-community-documentation.md`
+[5] Player metadata pipeline — `src/database.py` (`upsert_player()`, `upsert_players()`, `get_missing_player_ids()`, `backfill_player_metadata()`, `populate_player_game_stats()`)
 
 ## Related Pages
 
@@ -99,5 +122,6 @@ Last verified: 2026-04-06
 
 ## Revision History
 
+- 2026-04-20 — Added player landing endpoint section (roadmap Phase 2.5.1: player metadata pipeline).
 - 2026-04-08 — Added community documentation references (Zmalski, dword4) and legacy API note.
 - 2026-04-06 — Created. Compiled from nhl_api.py, main.py, and API response inspection.
