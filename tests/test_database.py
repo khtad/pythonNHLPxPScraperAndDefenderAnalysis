@@ -823,3 +823,29 @@ def test_populate_player_game_stats_defaults_unknown_position_group(conn):
         "SELECT player_id, position_group FROM player_game_stats ORDER BY player_id"
     )
     assert cur.fetchall() == [(101, "F"), (201, "G")]
+
+
+def test_populate_player_game_stats_merges_goalie_shooter_same_game(conn):
+    """A goalie who also registers a shot in the same game (e.g., empty-net
+    goal) must retain their shot and goal counts; the goalie aggregate's
+    zero-totals row must not overwrite the shooter aggregate.
+    """
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 914, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    upsert_player(conn, _player_row(401, position="G", team_id=1))
+    upsert_player(conn, _player_row(501, position="C", team_id=2))
+
+    _seed_shot(conn, 914, 1, shooter_id=501, goalie_id=401, shooting_team_id=2, is_goal=0)
+    _seed_shot(conn, 914, 2, shooter_id=501, goalie_id=401, shooting_team_id=2, is_goal=0)
+    _seed_shot(conn, 914, 3, shooter_id=401, goalie_id=None, shooting_team_id=1, is_goal=1)
+
+    populate_player_game_stats(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT player_id, team_id, position_group, shots, goals "
+        "FROM player_game_stats WHERE player_id = 401"
+    )
+    assert cur.fetchone() == (401, 1, "G", 1, 1)

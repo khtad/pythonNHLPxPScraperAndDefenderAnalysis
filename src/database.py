@@ -878,17 +878,27 @@ def populate_player_game_stats(conn):
     )
     goalie_rows = cursor.fetchall()
 
-    batch = []
+    merged = {}
     for shooter_id, game_id, team_id, position, shots, goals in shooter_rows:
         group = _position_group(position) or "F"
-        batch.append((shooter_id, game_id, team_id, group, int(shots), int(goals or 0)))
+        merged[(shooter_id, game_id)] = [team_id, group, int(shots), int(goals or 0)]
 
     for goalie_id, game_id, team_id, position in goalie_rows:
         group = _position_group(position) or "G"
-        batch.append((goalie_id, game_id, team_id, group, 0, 0))
+        key = (goalie_id, game_id)
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = [team_id, group, 0, 0]
+        else:
+            existing[1] = group
 
-    if not batch:
+    if not merged:
         return 0
+
+    batch = [
+        (player_id, game_id, team_id, group, shots, goals)
+        for (player_id, game_id), (team_id, group, shots, goals) in merged.items()
+    ]
 
     cursor.executemany(
         """INSERT INTO player_game_stats
