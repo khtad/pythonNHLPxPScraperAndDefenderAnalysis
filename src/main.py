@@ -1,7 +1,7 @@
 import datetime
 import os
 
-from nhl_api import get_weekly_schedule, get_full_play_by_play
+from nhl_api import get_weekly_schedule, get_full_play_by_play, get_player_metadata
 from database import (create_table, insert_data, create_connection,
                       create_collection_log_table, is_game_collected,
                       mark_date_collected, get_last_collected_date,
@@ -13,6 +13,8 @@ from database import (create_table, insert_data, create_connection,
                       insert_shot_events, game_has_metadata,
                       upsert_game_metadata, upsert_team,
                       ensure_player_database_schema,
+                      backfill_player_metadata,
+                      populate_player_game_stats,
                       populate_game_context,
                       populate_venue_diagnostics,
                       get_collected_game_ids,
@@ -129,6 +131,21 @@ def finalize_season_diagnostics(conn):
     return len(seasons)
 
 
+def refresh_player_tables(conn):
+    """Backfill player metadata and (re)populate player_game_stats.
+
+    Runs after the scraper/backfill loop: the player-landing endpoint is
+    only queried for shooter/goalie ids that are still missing from the
+    players dimension. `populate_player_game_stats` is idempotent by
+    construction (ON CONFLICT DO UPDATE on (player_id, game_id)).
+    """
+    attempted, upserted = backfill_player_metadata(conn, get_player_metadata)
+    print(f"Player metadata backfill: attempted={attempted} upserted={upserted}")
+    rows = populate_player_game_stats(conn)
+    print(f"Populated player_game_stats rows={rows}")
+    return attempted, upserted, rows
+
+
 def backfill_missing_game_data(limit=None):
     """Backfill metadata and shot events for already-collected raw games."""
     conn = _init_database()
@@ -148,6 +165,7 @@ def backfill_missing_game_data(limit=None):
             processed_games += 1
 
     finalize_season_diagnostics(conn)
+    refresh_player_tables(conn)
 
     conn.close()
     print(f"Finished backfill for {processed_games} games")
@@ -201,6 +219,7 @@ def main():
         current_date = datetime.date.fromisoformat(next_start_date)
 
     finalize_season_diagnostics(conn)
+    refresh_player_tables(conn)
 
     conn.close()
 

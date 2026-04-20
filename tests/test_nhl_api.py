@@ -373,3 +373,89 @@ def test_get_play_by_play_data_delegates_to_full(monotonic_mock, sleep_mock, moc
     data = nhl_api.get_play_by_play_data(2023020001)
     assert data == [{"period": 1, "time": "10:00", "event": "shot-on-goal", "description": "shot-on-goal"}]
     assert mock_get.call_count == 1
+
+
+# --- get_player_metadata tests ---
+
+
+_LANDING_PAYLOAD_MCDAVID = {
+    "playerId": 8478402,
+    "firstName": {"default": "Connor"},
+    "lastName": {"default": "McDavid"},
+    "shootsCatches": "L",
+    "position": "C",
+    "currentTeamId": 22,
+}
+
+
+@patch.object(nhl_api._session, "get")
+def test_get_player_metadata_parses_landing_payload(mock_get):
+    mock_get.return_value = _mock_response(200, _LANDING_PAYLOAD_MCDAVID)
+
+    row = nhl_api.get_player_metadata(8478402)
+
+    assert row == {
+        "player_id": 8478402,
+        "first_name": "Connor",
+        "last_name": "McDavid",
+        "shoots_catches": "L",
+        "position": "C",
+        "team_id": 22,
+    }
+    called_url = mock_get.call_args[0][0]
+    assert called_url.endswith("/player/8478402/landing")
+
+
+@patch.object(nhl_api._session, "get")
+def test_get_player_metadata_returns_none_on_non_200(mock_get):
+    mock_get.return_value = _mock_response(404, {})
+
+    assert nhl_api.get_player_metadata(8478402) is None
+
+
+@patch.object(nhl_api._session, "get")
+def test_get_player_metadata_handles_missing_fields(mock_get):
+    """Missing nested locale keys and top-level fields should degrade to None."""
+    mock_get.return_value = _mock_response(
+        200,
+        {
+            "playerId": 123,
+            "firstName": {},
+            "shootsCatches": None,
+        },
+    )
+
+    row = nhl_api.get_player_metadata(123)
+
+    assert row == {
+        "player_id": 123,
+        "first_name": None,
+        "last_name": None,
+        "shoots_catches": None,
+        "position": None,
+        "team_id": None,
+    }
+
+
+@patch.object(nhl_api._session, "get")
+def test_get_player_metadata_falls_back_to_argument_id(mock_get):
+    """When the payload omits playerId, fall back to the id we requested."""
+    mock_get.return_value = _mock_response(
+        200,
+        {
+            "firstName": {"default": "Anon"},
+            "lastName": {"default": "Skater"},
+            "shootsCatches": "R",
+            "position": "D",
+            "currentTeamId": 10,
+        },
+    )
+
+    row = nhl_api.get_player_metadata(999)
+
+    assert row["player_id"] == 999
+    assert row["position"] == "D"
+
+
+def test_parse_player_landing_returns_none_for_missing_payload():
+    assert nhl_api._parse_player_landing(None, 1) is None

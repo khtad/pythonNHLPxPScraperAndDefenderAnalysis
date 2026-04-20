@@ -88,3 +88,42 @@ def get_play_by_play_data(game_id):
         }
         for play in data.get("plays", [])
     ]
+
+
+_PLAYER_LANDING_DEFAULT_LOCALE = "default"
+
+
+def _localized_name(value):
+    """Return the default-locale string from an NHL API localized-name field."""
+    if isinstance(value, dict):
+        return value.get(_PLAYER_LANDING_DEFAULT_LOCALE)
+    return value
+
+
+def _parse_player_landing(data, player_id):
+    """Shape a /player/{id}/landing response into a players-table row dict.
+
+    Returns None if the payload is missing the identifier.
+    """
+    if data is None:
+        return None
+
+    resolved_id = data.get("playerId", player_id)
+    if resolved_id is None:
+        return None
+
+    return {
+        "player_id": resolved_id,
+        "first_name": _localized_name(data.get("firstName")),
+        "last_name": _localized_name(data.get("lastName")),
+        "shoots_catches": data.get("shootsCatches"),
+        "position": data.get("position"),
+        "team_id": data.get("currentTeamId"),
+    }
+
+
+def get_player_metadata(player_id):
+    """Fetch a player's landing-endpoint metadata, or None on failure."""
+    url = f"{_NHL_API_BASE_URL}/player/{player_id}/landing"
+    data = _api_get(url)
+    return _parse_player_landing(data, player_id)

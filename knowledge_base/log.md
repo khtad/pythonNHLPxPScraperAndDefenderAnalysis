@@ -143,3 +143,14 @@
 - Updated `index.md` — bumped last-updated date
 **Notes:** Governance-only updates for PR #44 (rigor-first roadmap rewrite establishing the eight-point Statistical Analysis Rigor framework), PR #45 / PR #46 (retroactive acceptance blocks for Phases 0 and 1), and the substantive content from PR #47 (Phase 2 completion: venue diagnostics wiring, `game_context` validator, VIF helper with live findings). Phase 2's acceptance criteria (2) and (3) — held-out faceoff-decay validation and zone-start change-on-the-fly inference — are formally deferred to their gating dependencies (Phase 2.5.2 for validation helpers, shifts ingestion for zone-start). No new articles; no v3 coordinate dependencies affected. Wiki counts unchanged.
 
+### 2026-04-20 — UPDATE
+
+**Action:** Recorded roadmap Phase 2.5.1 completion: player metadata pipeline
+**Source:** `src/nhl_api.py` (`get_player_metadata`, `_parse_player_landing`), `src/database.py` (`upsert_player`, `upsert_players`, `get_missing_player_ids`, `backfill_player_metadata`, `populate_player_game_stats`), `src/main.py` (`refresh_player_tables`), `tests/test_nhl_api.py`, `tests/test_database.py`
+**Pages touched:**
+- Updated `wiki/data/nhl-api-endpoints.md` — added "Player Landing Endpoint" section documenting URL pattern, response shape, and parser behavior; updated overview and relevance sections from two to three endpoints; added source [5] for the player metadata pipeline; bumped last-verified date
+- Updated `wiki/concepts/handedness-effective-angle.md` — flipped implementation-status table rows for `players.shoots_catches` and the player-landing endpoint from "not implemented" to "populated" / "implemented"; updated revalidate tag and relevance section; added sources [2] and [3]; bumped last-verified date
+- Updated `index.md` — bumped last-updated date
+**Notes:** Pipeline derives shooter/goalie ids from `shot_events`, fetches each missing player from `/v1/player/{id}/landing`, and upserts into the `players` dimension. `populate_player_game_stats` derives per-game counting stats (shots, goals) from `shot_events` and infers goalie `team_id` via the opponent of `shooting_team_id` in the `games` table. TOI and non-shot counters remain at their NOT NULL DEFAULT 0 values until shifts/boxscore data arrive in later phases — acceptable under `validate_player_game_stats_quality`. No new articles; no schema version bump (player tables are not derived-shot tables with a version column). Wiki counts unchanged.
+
+

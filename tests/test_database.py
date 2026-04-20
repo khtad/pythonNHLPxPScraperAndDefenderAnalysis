@@ -6,6 +6,7 @@ import pytest
 from database import (
     _XG_EVENT_SCHEMA_VERSION,
     _quote_identifier,
+    backfill_player_metadata,
     create_core_dimension_tables,
     create_collection_log_table,
     create_player_game_features_table,
@@ -18,6 +19,7 @@ from database import (
     deduplicate_existing_tables,
     fix_incomplete_collection_log,
     get_last_collected_date,
+    get_missing_player_ids,
     get_random_game_id,
     insert_data,
     insert_shot_events,
@@ -25,7 +27,10 @@ from database import (
     is_game_collected,
     load_game_shots,
     mark_date_collected,
+    populate_player_game_stats,
     upsert_game_metadata,
+    upsert_player,
+    upsert_players,
     validate_player_game_stats_quality,
 )
 
@@ -565,3 +570,256 @@ def test_create_on_ice_intervals_table_creates_expected_columns(conn):
     cols = [row[1] for row in cur.fetchall()]
     assert "home_skaters_json" in cols
     assert "away_skaters_json" in cols
+
+
+# ── Phase 2.5.1: players upsert / backfill / populate_player_game_stats ─────
+
+
+def _player_row(player_id, position="C", team_id=22, shoots="L"):
+    return {
+        "player_id": player_id,
+        "first_name": f"First{player_id}",
+        "last_name": f"Last{player_id}",
+        "shoots_catches": shoots,
+        "position": position,
+        "team_id": team_id,
+    }
+
+
+def _fetch_player_rows(conn):
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT player_id, first_name, last_name, shoots_catches, position, team_id "
+        "FROM players ORDER BY player_id"
+    )
+    return cur.fetchall()
+
+
+def test_upsert_player_inserts_new_row(conn):
+    ensure_player_database_schema(conn)
+    upsert_player(conn, _player_row(10))
+    assert _fetch_player_rows(conn) == [
+        (10, "First10", "Last10", "L", "C", 22),
+    ]
+
+
+def test_upsert_player_updates_existing_row(conn):
+    ensure_player_database_schema(conn)
+    upsert_player(conn, _player_row(10, position="C", team_id=22))
+    upsert_player(conn, _player_row(10, position="L", team_id=30, shoots="R"))
+    rows = _fetch_player_rows(conn)
+    assert rows == [(10, "First10", "Last10", "R", "L", 30)]
+
+
+def test_upsert_player_rejects_unknown_keys(conn):
+    ensure_player_database_schema(conn)
+    with pytest.raises(ValueError):
+        upsert_player(conn, {"player_id": 1, "nickname": "Gretz"})
+
+
+def test_upsert_player_requires_player_id(conn):
+    ensure_player_database_schema(conn)
+    with pytest.raises(ValueError):
+        upsert_player(conn, {"player_id": None, "position": "C"})
+
+
+def test_upsert_players_batch_insert_and_update(conn):
+    ensure_player_database_schema(conn)
+    upsert_players(conn, [_player_row(1), _player_row(2), _player_row(3)])
+    assert len(_fetch_player_rows(conn)) == 3
+
+    upsert_players(conn, [
+        _player_row(2, position="D", team_id=50),
+        _player_row(4, position="G", team_id=11),
+    ])
+    rows = dict((r[0], r) for r in _fetch_player_rows(conn))
+    assert rows[2][4] == "D" and rows[2][5] == 50
+    assert rows[4][4] == "G"
+    assert len(rows) == 4
+
+
+def test_upsert_players_empty_list_is_noop(conn):
+    ensure_player_database_schema(conn)
+    upsert_players(conn, [])
+    assert _fetch_player_rows(conn) == []
+
+
+def _seed_shot(conn, game_id, event_idx, shooter_id, goalie_id,
+               shooting_team_id=1, is_goal=0):
+    insert_shot_events(conn, [
+        {
+            "game_id": game_id,
+            "event_idx": event_idx,
+            "period": 1,
+            "time_in_period": "10:00",
+            "time_remaining_seconds": 600,
+            "shot_type": "wrist",
+            "x_coord": 50.0,
+            "y_coord": 0.0,
+            "distance_to_goal": 40.0,
+            "angle_to_goal": 5.0,
+            "is_goal": is_goal,
+            "shooting_team_id": shooting_team_id,
+            "shooter_id": shooter_id,
+            "goalie_id": goalie_id,
+        },
+    ])
+
+
+def test_get_missing_player_ids_unions_shooters_and_goalies(conn):
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 900, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _seed_shot(conn, 900, 1, shooter_id=101, goalie_id=201)
+    _seed_shot(conn, 900, 2, shooter_id=102, goalie_id=201)
+
+    upsert_player(conn, _player_row(101))
+
+    missing = get_missing_player_ids(conn)
+    assert missing == [102, 201]
+
+
+def test_get_missing_player_ids_filters_nulls(conn):
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 901, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _seed_shot(conn, 901, 1, shooter_id=101, goalie_id=None)
+    _seed_shot(conn, 901, 2, shooter_id=None, goalie_id=201)
+
+    assert get_missing_player_ids(conn) == [101, 201]
+
+
+def test_backfill_player_metadata_upserts_every_missing_id(conn):
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 902, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _seed_shot(conn, 902, 1, shooter_id=101, goalie_id=201)
+    _seed_shot(conn, 902, 2, shooter_id=102, goalie_id=201)
+
+    fetch_calls = []
+
+    def fake_fetch(player_id):
+        fetch_calls.append(player_id)
+        return _player_row(player_id)
+
+    attempted, upserted = backfill_player_metadata(conn, fake_fetch, batch_size=2)
+    assert attempted == 3
+    assert upserted == 3
+    assert sorted(fetch_calls) == [101, 102, 201]
+    assert {r[0] for r in _fetch_player_rows(conn)} == {101, 102, 201}
+
+
+def test_backfill_player_metadata_is_idempotent_on_second_run(conn):
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 903, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _seed_shot(conn, 903, 1, shooter_id=101, goalie_id=201)
+
+    def fake_fetch(player_id):
+        return _player_row(player_id)
+
+    backfill_player_metadata(conn, fake_fetch)
+    attempted, upserted = backfill_player_metadata(conn, fake_fetch)
+    assert attempted == 0
+    assert upserted == 0
+
+
+def test_backfill_player_metadata_skips_when_fetch_returns_none(conn):
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 904, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _seed_shot(conn, 904, 1, shooter_id=101, goalie_id=201)
+
+    def fake_fetch(player_id):
+        return None if player_id == 201 else _player_row(player_id)
+
+    attempted, upserted = backfill_player_metadata(conn, fake_fetch)
+    assert attempted == 2
+    assert upserted == 1
+    assert {r[0] for r in _fetch_player_rows(conn)} == {101}
+
+
+def test_populate_player_game_stats_counts_shots_and_goals(conn):
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 910, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    upsert_player(conn, _player_row(101, position="C", team_id=1))
+    upsert_player(conn, _player_row(201, position="G", team_id=2))
+
+    _seed_shot(conn, 910, 1, shooter_id=101, goalie_id=201, shooting_team_id=1, is_goal=0)
+    _seed_shot(conn, 910, 2, shooter_id=101, goalie_id=201, shooting_team_id=1, is_goal=1)
+    _seed_shot(conn, 910, 3, shooter_id=101, goalie_id=201, shooting_team_id=1, is_goal=0)
+
+    populate_player_game_stats(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT player_id, team_id, position_group, shots, goals "
+        "FROM player_game_stats ORDER BY player_id"
+    )
+    rows = cur.fetchall()
+    assert rows == [
+        (101, 1, "F", 3, 1),
+        (201, 2, "G", 0, 0),
+    ]
+
+    issues = validate_player_game_stats_quality(conn)
+    assert all(v == 0 for v in issues.values()), issues
+
+
+def test_populate_player_game_stats_derives_goalie_team_id_from_games(conn):
+    """Goalie rows use the opponent of shooting_team_id in the games table."""
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 911, game_date="2023-10-15", season="20232024",
+                         home_team_id=7, away_team_id=8)
+    upsert_player(conn, _player_row(301, position="G", team_id=None))
+
+    _seed_shot(conn, 911, 1, shooter_id=999, goalie_id=301, shooting_team_id=7)
+    _seed_shot(conn, 911, 2, shooter_id=999, goalie_id=301, shooting_team_id=7)
+
+    populate_player_game_stats(conn)
+
+    cur = conn.cursor()
+    cur.execute("SELECT team_id FROM player_game_stats WHERE player_id = 301")
+    assert cur.fetchone()[0] == 8
+
+
+def test_populate_player_game_stats_is_idempotent(conn):
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 912, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    upsert_player(conn, _player_row(101, position="C", team_id=1))
+    upsert_player(conn, _player_row(201, position="G", team_id=2))
+    _seed_shot(conn, 912, 1, shooter_id=101, goalie_id=201, shooting_team_id=1, is_goal=1)
+
+    populate_player_game_stats(conn)
+    populate_player_game_stats(conn)
+
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM player_game_stats")
+    assert cur.fetchone()[0] == 2
+
+
+def test_populate_player_game_stats_defaults_unknown_position_group(conn):
+    """If a shooter has no players-table row, default to F; goalies default to G."""
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 913, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _seed_shot(conn, 913, 1, shooter_id=101, goalie_id=201, shooting_team_id=1)
+
+    populate_player_game_stats(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT player_id, position_group FROM player_game_stats ORDER BY player_id"
+    )
+    assert cur.fetchall() == [(101, "F"), (201, "G")]

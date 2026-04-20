@@ -3,7 +3,7 @@
 > How a shooter's stick hand determines which goal posts are accessible from a given ice position, making the geometric angle to goal an incomplete measure of shot quality.
 
 <!-- data-version: v2 -->
-<!-- data-revalidate: After v3 backfill, the y_coord sign used for off-wing classification depends on correct coordinate normalization. Re-verify off-wing classification logic against v3 data. Also: handedness data (players.shoots_catches) is not yet populated — this article describes planned features. -->
+<!-- data-revalidate: After v3 backfill, the y_coord sign used for off-wing classification depends on correct coordinate normalization. Re-verify off-wing classification logic against v3 data. Phase 2.5.1 populated players.shoots_catches; the is_off_wing column and the geometric effective-angle calculation remain unimplemented. -->
 
 ## Overview
 
@@ -54,12 +54,12 @@ The component design describes a two-phase approach [1]:
 
 | Item | Status |
 |------|--------|
-| `players.shoots_catches` column | Exists in schema, **not populated** |
-| Player metadata API endpoint | **Not implemented** in `nhl_api.py` |
+| `players.shoots_catches` column | **Populated** via `backfill_player_metadata` (roadmap Phase 2.5.1) [2] |
+| Player metadata API endpoint | **Implemented** as `get_player_metadata()` (`/v1/player/{id}/landing`) [3] |
 | `is_off_wing` classification | **Not implemented** |
 | Effective angle calculation | **Not implemented** |
 
-This is a planned Phase B feature, gated on Phase D (model training) confirming that `is_off_wing` shows significant interaction with shot type and angle [1].
+The dimension table is now in place; the off-wing flag and effective-angle calculation remain Phase B features, gated on Phase D (model training) confirming a significant interaction with shot type and angle [1].
 
 ### Coordinate Normalization Dependency
 
@@ -67,7 +67,7 @@ Off-wing classification depends on the sign of y_coord in normalized coordinates
 
 ## Relevance to This Project
 
-Handedness features are designed in `docs/xg_model_components/09_handedness_and_effective_angle.md` [1]. Implementation requires adding a player metadata API endpoint, populating the `players` dimension table, and adding new columns to `shot_events` (version bump v3 → v4).
+Handedness features are designed in `docs/xg_model_components/09_handedness_and_effective_angle.md` [1]. The data prerequisites — a player metadata API endpoint and a populated `players` dimension table — landed in roadmap Phase 2.5.1 [2][3]. Remaining work: adding the `is_off_wing` column to `shot_events` (version bump) and the geometric effective-angle calculation.
 
 The expected impact is strongest for high-angle shots (>45 degrees) where the forehand/backhand distinction matters most. At small angles (<20 degrees from center), all shooters see roughly the same net exposure regardless of handedness.
 
@@ -76,6 +76,8 @@ Last verified: 2026-04-06
 ## Sources
 
 [1] Component design — `docs/xg_model_components/09_handedness_and_effective_angle.md`
+[2] Player metadata pipeline — `src/database.py` (`upsert_player`, `upsert_players`, `backfill_player_metadata`, `populate_player_game_stats`)
+[3] NHL API client — `src/nhl_api.py` (`get_player_metadata`, `_parse_player_landing`)
 
 ## Related Pages
 
@@ -85,4 +87,5 @@ Last verified: 2026-04-06
 
 ## Revision History
 
+- 2026-04-20 — Updated implementation status: `players.shoots_catches` now populated and the player-landing endpoint is implemented (roadmap Phase 2.5.1). The `is_off_wing` column and effective-angle calculation remain unimplemented.
 - 2026-04-06 — Created. Compiled from component 09 design doc. All features are planned, not yet implemented.

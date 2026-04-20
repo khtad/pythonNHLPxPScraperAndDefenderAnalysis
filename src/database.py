@@ -726,6 +726,185 @@ def upsert_team(conn, team_id, abbrev, name):
     conn.commit()
 
 
+_PLAYERS_INSERT_COLUMNS = (
+    "player_id",
+    "first_name",
+    "last_name",
+    "shoots_catches",
+    "position",
+    "team_id",
+)
+
+_PLAYERS_ALLOWED_KEYS = frozenset(_PLAYERS_INSERT_COLUMNS)
+
+_PLAYERS_UPSERT_SQL = (
+    "INSERT INTO players (player_id, first_name, last_name, "
+    "shoots_catches, position, team_id) "
+    "VALUES (?, ?, ?, ?, ?, ?) "
+    "ON CONFLICT(player_id) DO UPDATE SET "
+    "first_name = excluded.first_name, "
+    "last_name = excluded.last_name, "
+    "shoots_catches = excluded.shoots_catches, "
+    "position = excluded.position, "
+    "team_id = excluded.team_id"
+)
+
+_NHL_FORWARD_POSITIONS = ("C", "L", "R")
+_NHL_DEFENSE_POSITIONS = ("D",)
+_NHL_GOALIE_POSITIONS = ("G",)
+
+
+def _player_row_tuple(player):
+    bad_keys = set(player.keys()) - _PLAYERS_ALLOWED_KEYS
+    if bad_keys:
+        raise ValueError(f"Invalid player keys: {bad_keys}")
+    if player.get("player_id") is None:
+        raise ValueError("player_id is required for upsert_player")
+    return tuple(player.get(c) for c in _PLAYERS_INSERT_COLUMNS)
+
+
+def upsert_player(conn, player):
+    """Insert or update a row in the players dimension table."""
+    cursor = conn.cursor()
+    cursor.execute(_PLAYERS_UPSERT_SQL, _player_row_tuple(player))
+    conn.commit()
+
+
+def upsert_players(conn, players):
+    """Batch-upsert multiple player dicts via executemany."""
+    if not players:
+        return
+    rows = [_player_row_tuple(p) for p in players]
+    cursor = conn.cursor()
+    cursor.executemany(_PLAYERS_UPSERT_SQL, rows)
+    conn.commit()
+
+
+def get_missing_player_ids(conn):
+    """Return player ids in shot_events that are absent from the players table.
+
+    Deduplicates shooter_id and goalie_id, filters NULLs, and excludes any
+    player_id already present in players.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT DISTINCT id FROM (
+               SELECT shooter_id AS id FROM shot_events WHERE shooter_id IS NOT NULL
+               UNION
+               SELECT goalie_id AS id FROM shot_events WHERE goalie_id IS NOT NULL
+           )
+           WHERE id NOT IN (SELECT player_id FROM players)
+           ORDER BY id"""
+    )
+    return [row[0] for row in cursor.fetchall()]
+
+
+def backfill_player_metadata(conn, fetch_fn, batch_size=50):
+    """Fetch and upsert players missing from the players dimension table.
+
+    fetch_fn(player_id) must return a dict with `_PLAYERS_INSERT_COLUMNS`
+    keys or None. Writes accumulate in batches of batch_size to amortize
+    the commit cost. Returns (attempted, upserted) counts.
+    """
+    missing_ids = get_missing_player_ids(conn)
+    attempted = 0
+    upserted = 0
+    buffer = []
+
+    for player_id in missing_ids:
+        attempted += 1
+        row = fetch_fn(player_id)
+        if row is None:
+            continue
+        buffer.append(row)
+        if len(buffer) >= batch_size:
+            upsert_players(conn, buffer)
+            upserted += len(buffer)
+            buffer = []
+
+    if buffer:
+        upsert_players(conn, buffer)
+        upserted += len(buffer)
+
+    return attempted, upserted
+
+
+def _position_group(position):
+    """Map an NHL position code to its F/D/G position group, or None."""
+    if position in _NHL_FORWARD_POSITIONS:
+        return "F"
+    if position in _NHL_DEFENSE_POSITIONS:
+        return "D"
+    if position in _NHL_GOALIE_POSITIONS:
+        return "G"
+    return None
+
+
+def populate_player_game_stats(conn):
+    """Derive per-player counting stats from shot_events and upsert into
+    player_game_stats.
+
+    Shooters contribute shot and goal counts; goalies get a row for every
+    game they appear in (with team_id derived from the games table). TOI,
+    assists, and non-shot counters remain at their NOT NULL DEFAULT 0 values
+    until richer sources (shifts, boxscore) arrive in later phases.
+
+    Returns the number of rows upserted.
+    """
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """SELECT se.shooter_id, se.game_id, se.shooting_team_id,
+                  p.position,
+                  COUNT(*) AS shots,
+                  SUM(CASE WHEN se.is_goal = 1 THEN 1 ELSE 0 END) AS goals
+           FROM shot_events AS se
+           LEFT JOIN players AS p ON p.player_id = se.shooter_id
+           WHERE se.shooter_id IS NOT NULL
+           GROUP BY se.shooter_id, se.game_id, se.shooting_team_id, p.position"""
+    )
+    shooter_rows = cursor.fetchall()
+
+    cursor.execute(
+        """SELECT se.goalie_id, se.game_id,
+                  CASE WHEN se.shooting_team_id = g.home_team_id
+                       THEN g.away_team_id ELSE g.home_team_id END AS goalie_team_id,
+                  p.position
+           FROM shot_events AS se
+           LEFT JOIN games AS g ON g.game_id = se.game_id
+           LEFT JOIN players AS p ON p.player_id = se.goalie_id
+           WHERE se.goalie_id IS NOT NULL
+           GROUP BY se.goalie_id, se.game_id, goalie_team_id, p.position"""
+    )
+    goalie_rows = cursor.fetchall()
+
+    batch = []
+    for shooter_id, game_id, team_id, position, shots, goals in shooter_rows:
+        group = _position_group(position) or "F"
+        batch.append((shooter_id, game_id, team_id, group, int(shots), int(goals or 0)))
+
+    for goalie_id, game_id, team_id, position in goalie_rows:
+        group = _position_group(position) or "G"
+        batch.append((goalie_id, game_id, team_id, group, 0, 0))
+
+    if not batch:
+        return 0
+
+    cursor.executemany(
+        """INSERT INTO player_game_stats
+               (player_id, game_id, team_id, position_group, shots, goals)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(player_id, game_id) DO UPDATE SET
+               team_id = excluded.team_id,
+               position_group = excluded.position_group,
+               shots = excluded.shots,
+               goals = excluded.goals""",
+        batch,
+    )
+    conn.commit()
+    return len(batch)
+
+
 # ── Phase 2, Area 1: game_context table ─────────────────────────────
 
 _GAME_CONTEXT_SCHEMA_VERSION = "v1"
@@ -843,83 +1022,83 @@ def populate_game_context(conn, game_id):
 
 
 # ── Phase 2, Area 4: venue bias diagnostics ─────────────────────────
-
-_GAME_CONTEXT_REST_COLUMNS = (
-    "home_rest_days",
-    "away_rest_days",
-    "rest_advantage",
-    "home_is_back_to_back",
-    "away_is_back_to_back",
-)
-_GAME_CONTEXT_TRAVEL_COLUMNS = ("travel_distance_km", "timezone_delta")
-
-
-def _count_nulls(cursor, table, column, where_sql="", where_params=()):
-    quoted = _quote_identifier(column)
-    sql = (
-        f"SELECT COUNT(*) FROM {_quote_identifier(table)} "
-        f"WHERE {quoted} IS NULL"
-    )
-    if where_sql:
-        sql += f" AND {where_sql}"
-    cursor.execute(sql, where_params)
-    return cursor.fetchone()[0]
-
-
-def validate_game_context_quality(conn):
-    """Count null-rate and orphan-row quality issues for `game_context`.
-
-    Rest-day nulls on the first game of each team's season are structural
-    and reported separately as `structural_null_rest_rows`. Travel and
-    timezone nulls reflect missing arena coverage and are always reported
-    as unexpected.
-    """
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM game_context")
-    total_rows = cursor.fetchone()[0]
-
-    cursor.execute(
-        """SELECT COUNT(*) FROM game_context gc
-           LEFT JOIN games g ON g.game_id = gc.game_id
-           WHERE g.game_id IS NULL"""
-    )
-    orphan_rows = cursor.fetchone()[0]
-
-    cursor.execute(
-        """SELECT COUNT(*) FROM game_context gc
-           JOIN games g ON g.game_id = gc.game_id
-           WHERE NOT EXISTS (
-               SELECT 1 FROM games g2
-               WHERE g2.game_id != g.game_id
-                 AND g2.game_date < g.game_date
-                 AND (g2.home_team_id = g.home_team_id
-                      OR g2.away_team_id = g.home_team_id)
-           )
-              OR NOT EXISTS (
-               SELECT 1 FROM games g3
-               WHERE g3.game_id != g.game_id
-                 AND g3.game_date < g.game_date
-                 AND (g3.home_team_id = g.away_team_id
-                      OR g3.away_team_id = g.away_team_id)
-           )"""
-    )
-    structural_null_rest_rows = cursor.fetchone()[0]
-
-    result = {
-        "total_rows": total_rows,
-        "orphan_game_rows": orphan_rows,
-        "structural_null_rest_rows": structural_null_rest_rows,
-    }
-    for column in _GAME_CONTEXT_REST_COLUMNS:
-        result[f"null_{column}_rows"] = _count_nulls(
-            cursor, "game_context", column
-        )
-    for column in _GAME_CONTEXT_TRAVEL_COLUMNS:
-        result[f"null_{column}_rows"] = _count_nulls(
-            cursor, "game_context", column
-        )
-    return result
-
+
+_GAME_CONTEXT_REST_COLUMNS = (
+    "home_rest_days",
+    "away_rest_days",
+    "rest_advantage",
+    "home_is_back_to_back",
+    "away_is_back_to_back",
+)
+_GAME_CONTEXT_TRAVEL_COLUMNS = ("travel_distance_km", "timezone_delta")
+
+
+def _count_nulls(cursor, table, column, where_sql="", where_params=()):
+    quoted = _quote_identifier(column)
+    sql = (
+        f"SELECT COUNT(*) FROM {_quote_identifier(table)} "
+        f"WHERE {quoted} IS NULL"
+    )
+    if where_sql:
+        sql += f" AND {where_sql}"
+    cursor.execute(sql, where_params)
+    return cursor.fetchone()[0]
+
+
+def validate_game_context_quality(conn):
+    """Count null-rate and orphan-row quality issues for `game_context`.
+
+    Rest-day nulls on the first game of each team's season are structural
+    and reported separately as `structural_null_rest_rows`. Travel and
+    timezone nulls reflect missing arena coverage and are always reported
+    as unexpected.
+    """
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM game_context")
+    total_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        """SELECT COUNT(*) FROM game_context gc
+           LEFT JOIN games g ON g.game_id = gc.game_id
+           WHERE g.game_id IS NULL"""
+    )
+    orphan_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        """SELECT COUNT(*) FROM game_context gc
+           JOIN games g ON g.game_id = gc.game_id
+           WHERE NOT EXISTS (
+               SELECT 1 FROM games g2
+               WHERE g2.game_id != g.game_id
+                 AND g2.game_date < g.game_date
+                 AND (g2.home_team_id = g.home_team_id
+                      OR g2.away_team_id = g.home_team_id)
+           )
+              OR NOT EXISTS (
+               SELECT 1 FROM games g3
+               WHERE g3.game_id != g.game_id
+                 AND g3.game_date < g.game_date
+                 AND (g3.home_team_id = g.away_team_id
+                      OR g3.away_team_id = g.away_team_id)
+           )"""
+    )
+    structural_null_rest_rows = cursor.fetchone()[0]
+
+    result = {
+        "total_rows": total_rows,
+        "orphan_game_rows": orphan_rows,
+        "structural_null_rest_rows": structural_null_rest_rows,
+    }
+    for column in _GAME_CONTEXT_REST_COLUMNS:
+        result[f"null_{column}_rows"] = _count_nulls(
+            cursor, "game_context", column
+        )
+    for column in _GAME_CONTEXT_TRAVEL_COLUMNS:
+        result[f"null_{column}_rows"] = _count_nulls(
+            cursor, "game_context", column
+        )
+    return result
+
 # ── Phase 2, Area 4: venue bias diagnostics ─────────────────────────
 
 
