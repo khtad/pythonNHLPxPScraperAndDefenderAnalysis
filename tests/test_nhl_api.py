@@ -1,7 +1,10 @@
 import datetime
 from unittest.mock import Mock, patch
 
+import pytest
+
 import nhl_api
+from database import PlayerMetadataNotFound
 
 
 def _mock_response(status_code, payload):
@@ -407,10 +410,29 @@ def test_get_player_metadata_parses_landing_payload(mock_get):
 
 
 @patch.object(nhl_api._session, "get")
-def test_get_player_metadata_returns_none_on_non_200(mock_get):
+def test_get_player_metadata_raises_not_found_on_404(mock_get, capsys):
+    """404 is expected for pre-modern players — the helper must raise
+    PlayerMetadataNotFound so callers can cache the outcome, and must not
+    print an error line (those floods the backfill log for historical ids).
+    """
     mock_get.return_value = _mock_response(404, {})
 
+    with pytest.raises(PlayerMetadataNotFound) as exc_info:
+        nhl_api.get_player_metadata(8478402)
+
+    assert exc_info.value.player_id == 8478402
+    assert "Status code: 404" not in capsys.readouterr().out
+
+
+@patch.object(nhl_api._session, "get")
+def test_get_player_metadata_returns_none_on_non_404_failure(mock_get, capsys):
+    """Non-404 failures (e.g., 500) stay noisy and return None so the backfill
+    retries them on the next run instead of caching them as unavailable.
+    """
+    mock_get.return_value = _mock_response(500, {})
+
     assert nhl_api.get_player_metadata(8478402) is None
+    assert "Status code: 500" in capsys.readouterr().out
 
 
 @patch.object(nhl_api._session, "get")

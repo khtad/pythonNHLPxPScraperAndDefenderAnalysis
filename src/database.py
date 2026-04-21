@@ -309,6 +309,19 @@ def deduplicate_existing_tables(conn):
     conn.commit()
 
 
+class PlayerMetadataNotFound(LookupError):
+    """Upstream player-metadata source has no record for this player_id
+    (e.g., a 404 from the NHL player-landing endpoint for a pre-modern
+    player). Callers should cache this outcome via
+    `mark_players_metadata_unavailable` so future runs skip the id
+    instead of re-hitting the API every scrape.
+    """
+
+    def __init__(self, player_id):
+        super().__init__(f"No upstream metadata for player_id={player_id}")
+        self.player_id = player_id
+
+
 def create_core_dimension_tables(conn):
     cursor = conn.cursor()
     cursor.execute(
@@ -474,10 +487,47 @@ def validate_player_game_stats_quality(conn, max_toi_seconds=3600):
     }
 
 
+def create_player_metadata_unavailable_table(conn):
+    """Tracks player_ids that the upstream metadata endpoint has no record for,
+    so the backfill loop can skip them instead of re-hitting the API every run.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS player_metadata_unavailable (
+            player_id INTEGER PRIMARY KEY,
+            attempted_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+
+
+def mark_players_metadata_unavailable(conn, player_ids):
+    """Record a batch of player_ids as permanently missing upstream metadata.
+
+    Idempotent: a second call for the same id bumps `attempted_at` to the
+    latest attempt timestamp.
+    """
+    if not player_ids:
+        return
+    attempted_at = datetime.now().isoformat()
+    rows = [(player_id, attempted_at) for player_id in player_ids]
+    cursor = conn.cursor()
+    cursor.executemany(
+        """INSERT INTO player_metadata_unavailable (player_id, attempted_at)
+           VALUES (?, ?)
+           ON CONFLICT(player_id) DO UPDATE SET attempted_at = excluded.attempted_at""",
+        rows,
+    )
+    conn.commit()
+
+
 def ensure_player_database_schema(conn):
     create_core_dimension_tables(conn)
     create_player_game_stats_table(conn)
     create_player_game_features_table(conn)
+    create_player_metadata_unavailable_table(conn)
 
 
 # ── xG Phase 0: canonical shot events table ──────────────────────────
@@ -781,10 +831,13 @@ def upsert_players(conn, players):
 
 
 def get_missing_player_ids(conn):
-    """Return player ids in shot_events that are absent from the players table.
+    """Return player ids in shot_events that are absent from the players table
+    and not already recorded as upstream-unavailable.
 
-    Deduplicates shooter_id and goalie_id, filters NULLs, and excludes any
-    player_id already present in players.
+    Deduplicates shooter_id and goalie_id, filters NULLs, excludes any
+    player_id already present in `players`, and excludes ids recorded in
+    `player_metadata_unavailable` so the backfill loop doesn't re-hit the
+    API for known-404 ids on every run.
     """
     cursor = conn.cursor()
     cursor.execute(
@@ -794,6 +847,7 @@ def get_missing_player_ids(conn):
                SELECT goalie_id AS id FROM shot_events WHERE goalie_id IS NOT NULL
            )
            WHERE id NOT IN (SELECT player_id FROM players)
+             AND id NOT IN (SELECT player_id FROM player_metadata_unavailable)
            ORDER BY id"""
     )
     return [row[0] for row in cursor.fetchall()]
@@ -803,30 +857,47 @@ def backfill_player_metadata(conn, fetch_fn, batch_size=50):
     """Fetch and upsert players missing from the players dimension table.
 
     fetch_fn(player_id) must return a dict with `_PLAYERS_INSERT_COLUMNS`
-    keys or None. Writes accumulate in batches of batch_size to amortize
-    the commit cost. Returns (attempted, upserted) counts.
+    keys, or None for a transient failure that should be retried on the
+    next run. It may raise `PlayerMetadataNotFound` to signal that the
+    upstream source definitively has no record for the id; such ids are
+    recorded in `player_metadata_unavailable` and skipped by future runs.
+
+    Writes accumulate in batches of batch_size to amortize the commit cost.
+    Returns (attempted, upserted, unavailable) counts.
     """
     missing_ids = get_missing_player_ids(conn)
     attempted = 0
     upserted = 0
-    buffer = []
+    unavailable = 0
+    row_buffer = []
+    unavailable_buffer = []
 
     for player_id in missing_ids:
         attempted += 1
-        row = fetch_fn(player_id)
+        try:
+            row = fetch_fn(player_id)
+        except PlayerMetadataNotFound:
+            unavailable_buffer.append(player_id)
+            unavailable += 1
+            if len(unavailable_buffer) >= batch_size:
+                mark_players_metadata_unavailable(conn, unavailable_buffer)
+                unavailable_buffer = []
+            continue
         if row is None:
             continue
-        buffer.append(row)
-        if len(buffer) >= batch_size:
-            upsert_players(conn, buffer)
-            upserted += len(buffer)
-            buffer = []
+        row_buffer.append(row)
+        if len(row_buffer) >= batch_size:
+            upsert_players(conn, row_buffer)
+            upserted += len(row_buffer)
+            row_buffer = []
 
-    if buffer:
-        upsert_players(conn, buffer)
-        upserted += len(buffer)
+    if row_buffer:
+        upsert_players(conn, row_buffer)
+        upserted += len(row_buffer)
+    if unavailable_buffer:
+        mark_players_metadata_unavailable(conn, unavailable_buffer)
 
-    return attempted, upserted
+    return attempted, upserted, unavailable
 
 
 def _position_group(position):

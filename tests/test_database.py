@@ -6,11 +6,13 @@ import pytest
 from database import (
     _XG_EVENT_SCHEMA_VERSION,
     _quote_identifier,
+    PlayerMetadataNotFound,
     backfill_player_metadata,
     create_core_dimension_tables,
     create_collection_log_table,
     create_player_game_features_table,
     create_player_game_stats_table,
+    create_player_metadata_unavailable_table,
     create_on_ice_intervals_table,
     create_shot_events_table,
     create_shifts_table,
@@ -27,6 +29,7 @@ from database import (
     is_game_collected,
     load_game_shots,
     mark_date_collected,
+    mark_players_metadata_unavailable,
     populate_player_game_stats,
     upsert_game_metadata,
     upsert_player,
@@ -705,9 +708,12 @@ def test_backfill_player_metadata_upserts_every_missing_id(conn):
         fetch_calls.append(player_id)
         return _player_row(player_id)
 
-    attempted, upserted = backfill_player_metadata(conn, fake_fetch, batch_size=2)
+    attempted, upserted, unavailable = backfill_player_metadata(
+        conn, fake_fetch, batch_size=2
+    )
     assert attempted == 3
     assert upserted == 3
+    assert unavailable == 0
     assert sorted(fetch_calls) == [101, 102, 201]
     assert {r[0] for r in _fetch_player_rows(conn)} == {101, 102, 201}
 
@@ -723,9 +729,10 @@ def test_backfill_player_metadata_is_idempotent_on_second_run(conn):
         return _player_row(player_id)
 
     backfill_player_metadata(conn, fake_fetch)
-    attempted, upserted = backfill_player_metadata(conn, fake_fetch)
+    attempted, upserted, unavailable = backfill_player_metadata(conn, fake_fetch)
     assert attempted == 0
     assert upserted == 0
+    assert unavailable == 0
 
 
 def test_backfill_player_metadata_skips_when_fetch_returns_none(conn):
@@ -738,10 +745,85 @@ def test_backfill_player_metadata_skips_when_fetch_returns_none(conn):
     def fake_fetch(player_id):
         return None if player_id == 201 else _player_row(player_id)
 
-    attempted, upserted = backfill_player_metadata(conn, fake_fetch)
+    attempted, upserted, unavailable = backfill_player_metadata(conn, fake_fetch)
     assert attempted == 2
     assert upserted == 1
+    assert unavailable == 0
     assert {r[0] for r in _fetch_player_rows(conn)} == {101}
+
+
+def test_backfill_player_metadata_marks_unavailable_on_not_found(conn):
+    """Fetches that raise PlayerMetadataNotFound must be cached in
+    player_metadata_unavailable so subsequent runs skip the id.
+    """
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 905, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _seed_shot(conn, 905, 1, shooter_id=101, goalie_id=201)
+
+    def fake_fetch(player_id):
+        if player_id == 201:
+            raise PlayerMetadataNotFound(player_id)
+        return _player_row(player_id)
+
+    attempted, upserted, unavailable = backfill_player_metadata(
+        conn, fake_fetch, batch_size=1
+    )
+    assert attempted == 2
+    assert upserted == 1
+    assert unavailable == 1
+
+    cur = conn.cursor()
+    cur.execute("SELECT player_id FROM player_metadata_unavailable ORDER BY player_id")
+    assert [r[0] for r in cur.fetchall()] == [201]
+
+
+def test_backfill_player_metadata_skips_unavailable_ids_on_rerun(conn):
+    """A second run must not re-fetch ids already recorded as unavailable."""
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 906, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _seed_shot(conn, 906, 1, shooter_id=101, goalie_id=201)
+
+    call_counts = {"total": 0}
+
+    def fake_fetch(player_id):
+        call_counts["total"] += 1
+        if player_id == 201:
+            raise PlayerMetadataNotFound(player_id)
+        return _player_row(player_id)
+
+    backfill_player_metadata(conn, fake_fetch)
+    attempted, upserted, unavailable = backfill_player_metadata(conn, fake_fetch)
+    assert attempted == 0
+    assert upserted == 0
+    assert unavailable == 0
+    assert call_counts["total"] == 2
+
+
+def test_get_missing_player_ids_excludes_unavailable_rows(conn):
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 907, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _seed_shot(conn, 907, 1, shooter_id=101, goalie_id=201)
+
+    mark_players_metadata_unavailable(conn, [201])
+    assert get_missing_player_ids(conn) == [101]
+
+
+def test_mark_players_metadata_unavailable_is_idempotent(conn):
+    create_player_metadata_unavailable_table(conn)
+    mark_players_metadata_unavailable(conn, [101, 102])
+    mark_players_metadata_unavailable(conn, [101, 103])
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT player_id FROM player_metadata_unavailable ORDER BY player_id"
+    )
+    assert [r[0] for r in cur.fetchall()] == [101, 102, 103]
 
 
 def test_populate_player_game_stats_counts_shots_and_goals(conn):

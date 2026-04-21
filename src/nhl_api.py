@@ -2,22 +2,39 @@ import time
 
 import requests
 
+from database import PlayerMetadataNotFound
+
 _NHL_API_BASE_URL = "https://api-web.nhle.com/v1"
 _GAME_API_MIN_INTERVAL = 2  # seconds between game API calls
 _USER_AGENT = "Mozilla/5.0"
+_HTTP_OK = 200
+_HTTP_NOT_FOUND = 404
 _last_game_api_call = 0
 
 _session = requests.Session()
 _session.headers.update({"User-Agent": _USER_AGENT})
 
 
+def _api_get_with_status(url, silent_status_codes=()):
+    """Perform a GET request. Returns (parsed_json_or_None, status_code).
+
+    Prints an error for non-200 codes unless the code appears in
+    silent_status_codes — used for endpoints where certain responses are
+    expected and routine (e.g., 404 for pre-modern player ids on the
+    landing endpoint).
+    """
+    response = _session.get(url)
+    if response.status_code != _HTTP_OK:
+        if response.status_code not in silent_status_codes:
+            print(f"Error fetching {url}. Status code: {response.status_code}")
+        return None, response.status_code
+    return response.json(), _HTTP_OK
+
+
 def _api_get(url):
     """Perform a GET request and return parsed JSON, or None on non-200."""
-    response = _session.get(url)
-    if response.status_code != 200:
-        print(f"Error fetching {url}. Status code: {response.status_code}")
-        return None
-    return response.json()
+    data, _ = _api_get_with_status(url)
+    return data
 
 
 def get_game_ids_for_date(date):
@@ -123,7 +140,17 @@ def _parse_player_landing(data, player_id):
 
 
 def get_player_metadata(player_id):
-    """Fetch a player's landing-endpoint metadata, or None on failure."""
+    """Fetch a player's landing-endpoint metadata.
+
+    Returns a dict shaped for `_PLAYERS_INSERT_COLUMNS` on success, or None
+    on a transient non-404 failure that should be retried later. Raises
+    `PlayerMetadataNotFound` on 404 — historical (pre-modern) player ids
+    are not indexed by this endpoint, and the 404 is expected routine
+    traffic that the backfill caches via `mark_players_metadata_unavailable`
+    instead of re-fetching on every run.
+    """
     url = f"{_NHL_API_BASE_URL}/player/{player_id}/landing"
-    data = _api_get(url)
+    data, status = _api_get_with_status(url, silent_status_codes=(_HTTP_NOT_FOUND,))
+    if status == _HTTP_NOT_FOUND:
+        raise PlayerMetadataNotFound(player_id)
     return _parse_player_landing(data, player_id)
