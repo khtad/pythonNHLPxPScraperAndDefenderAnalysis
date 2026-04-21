@@ -139,11 +139,16 @@ def refresh_player_tables(conn):
     players dimension. `populate_player_game_stats` is idempotent by
     construction (ON CONFLICT DO UPDATE on (player_id, game_id)).
     """
-    attempted, upserted = backfill_player_metadata(conn, get_player_metadata)
-    print(f"Player metadata backfill: attempted={attempted} upserted={upserted}")
+    attempted, upserted, unavailable = backfill_player_metadata(
+        conn, get_player_metadata
+    )
+    print(
+        f"Player metadata backfill: attempted={attempted} "
+        f"upserted={upserted} unavailable={unavailable}"
+    )
     rows = populate_player_game_stats(conn)
     print(f"Populated player_game_stats rows={rows}")
-    return attempted, upserted, rows
+    return attempted, upserted, unavailable, rows
 
 
 def backfill_missing_game_data(limit=None):
