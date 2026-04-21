@@ -99,7 +99,7 @@ player-schema bootstrap
 
 - Framework: `pytest` + in-memory SQLite + request mocks
 - The player-schema tests are written in phase style (dimensions, fact table, features, validation)
-- **How to run tests**: Use `python3 -m venv /tmp/test-venv && /tmp/test-venv/bin/pip install -q pytest requests && /tmp/test-venv/bin/python -m pytest -q --ignore=tests/test_rink_viz.py` (or reuse the venv if it already exists: `/tmp/test-venv/bin/python -m pytest -q --ignore=tests/test_rink_viz.py`). Do not call `pytest` directly — the system Python does not have pytest installed. The `--ignore=tests/test_rink_viz.py` flag is required unless `matplotlib` has been explicitly installed into the venv (see failure 3 below); without it, pytest collection fails and zero tests run.
+- **How to run tests**: Use `python3 -m venv /tmp/test-venv && /tmp/test-venv/bin/pip install -q pytest requests && /tmp/test-venv/bin/python -m pytest -q --ignore=tests/test_rink_viz.py --ignore=tests/test_stats_helpers.py` (or reuse the venv if it already exists: `/tmp/test-venv/bin/python -m pytest -q --ignore=tests/test_rink_viz.py --ignore=tests/test_stats_helpers.py`). Do not call `pytest` directly — the system Python does not have pytest installed. The `--ignore` flags are required unless the corresponding optional dependencies have been explicitly installed into the venv (see failures 3 and 5 below); without them, pytest collection fails and zero tests run.
 - **Notebook dependencies**: When creating or modifying Jupyter notebooks, automatically install any required packages (e.g., `matplotlib`, `seaborn`, `numpy`, `ipykernel`) into the project virtual environment at `/tmp/test-venv` using `/tmp/test-venv/bin/pip install`. Do not assume packages are already installed — always install before first use.
 
 ## Test Failures Encountered, Fixes, and Prevention Rules
@@ -143,6 +143,13 @@ player-schema bootstrap
      - When counting rows where **any** of several independent nullability conditions hold, OR the predicates at the top level (a boolean OR of separate `NOT EXISTS`/`IS NULL`/`= 0` expressions). Do **not** push the OR down into a single predicate with OR'd sub-conditions inside a `NOT EXISTS` — `NOT EXISTS (A OR B)` means AND, not OR, on the outer result. When in doubt, truth-table the predicate on paper before committing the query.
      - Any validator that separates "structural nulls" from "quality nulls" must have a test that exercises **partial** structural nullability (one affected column, one populated column) in addition to the all-null and all-populated cases. A validator whose only test is the trivial uniform case cannot catch predicate-shape bugs like this one.
      - When a downstream consumer (a roadmap acceptance check, a report, a dashboard) will trust a validator's counts, treat the validator's predicate as a load-bearing expression: review every boolean connector in it for the intended row set, not just the column references.
+
+5. **Failure:** `ModuleNotFoundError: No module named 'numpy'` (then `'pandas'`) during pytest **collection** of `tests/test_stats_helpers.py`, aborting the entire suite.
+   - **Cause:** `tests/test_stats_helpers.py` imports `numpy` and `pandas` at module scope. The canonical `/tmp/test-venv` installs only `pytest` and `requests`, so collection fails on that file before any other test module runs.
+   - **Fix:** Add `--ignore=tests/test_stats_helpers.py` to the canonical test command. Updated "How to run tests" above to include both ignore flags. Install `numpy` and `pandas` first if tests in that file need to run.
+   - **Rules to avoid repeat failures of this type:**
+     - The canonical test command is authoritative and must list all `--ignore` flags for files whose dependencies are not in the base venv install. Update it whenever a new such file is added.
+     - Any test file that imports `numpy`, `pandas`, `scipy`, or other heavy data-science packages at module scope must either guard with `pytest.importorskip("<name>")` or be added to `--ignore` in the canonical command.
 
 ## Derived-Data Versioning & Backfill
 

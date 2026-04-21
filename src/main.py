@@ -63,7 +63,9 @@ def _process_game(conn, game_id):
             missing.append("metadata")
         if not shots_current:
             missing.append("shot events")
-        print(f"Backfilling game {game_id} ({', '.join(missing)})")
+        print(f"  Backfilling game {game_id} ({', '.join(missing)})")
+    else:
+        print(f"  Collecting game {game_id} (new)")
 
     full_data = get_full_play_by_play(game_id)
     if full_data is None:
@@ -109,6 +111,9 @@ def _process_game(conn, game_id):
         shot_events = extract_shot_events(full_data)
         if shot_events:
             insert_shot_events(conn, shot_events)
+            print(f"  game {game_id}: inserted {len(shot_events)} shot events")
+        else:
+            print(f"  game {game_id}: no shot events extracted")
 
     return True
 
@@ -165,7 +170,9 @@ def backfill_missing_game_data(limit=None):
     print(f"Found {len(missing_game_ids)} collected games missing derived data")
 
     processed_games = 0
-    for game_id in missing_game_ids:
+    total_missing = len(missing_game_ids)
+    for i, game_id in enumerate(missing_game_ids, 1):
+        print(f"[{i}/{total_missing}] game {game_id}")
         if _process_game(conn, game_id):
             processed_games += 1
 
@@ -213,7 +220,8 @@ def main():
 
             print(f"Processing date {date_str} ({games_found} games)")
 
-            for game_id in game_ids:
+            for i, game_id in enumerate(game_ids, 1):
+                print(f"  [{i}/{games_found}] game {game_id}")
                 if _process_game(conn, game_id):
                     games_collected += 1
 
