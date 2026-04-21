@@ -849,9 +849,19 @@ def populate_player_game_stats(conn):
     assists, and non-shot counters remain at their NOT NULL DEFAULT 0 values
     until richer sources (shifts, boxscore) arrive in later phases.
 
+    Stale rows for any game present in shot_events are cleared before the
+    rebuild so that a reprocessed game whose shot_events no longer reference
+    a previously-seen shooter or goalie does not leave that player's stats
+    row behind.
+
     Returns the number of rows upserted.
     """
     cursor = conn.cursor()
+
+    cursor.execute(
+        """DELETE FROM player_game_stats
+           WHERE game_id IN (SELECT DISTINCT game_id FROM shot_events)"""
+    )
 
     cursor.execute(
         """SELECT se.shooter_id, se.game_id, se.shooting_team_id,

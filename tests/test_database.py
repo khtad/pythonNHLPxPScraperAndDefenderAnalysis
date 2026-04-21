@@ -22,6 +22,7 @@ from database import (
     get_missing_player_ids,
     get_random_game_id,
     insert_data,
+    delete_game_shot_events,
     insert_shot_events,
     is_date_range_collected,
     is_game_collected,
@@ -849,3 +850,38 @@ def test_populate_player_game_stats_merges_goalie_shooter_same_game(conn):
         "FROM player_game_stats WHERE player_id = 401"
     )
     assert cur.fetchone() == (401, 1, "G", 1, 1)
+
+
+def test_populate_player_game_stats_clears_stale_rows_after_reprocess(conn):
+    """Reprocessing a game (delete + reinsert shot_events) must drop
+    player_game_stats rows for players who are no longer in the refreshed
+    events, so downstream features never see stale aggregates.
+    """
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 915, game_date="2023-10-15", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    upsert_player(conn, _player_row(101, position="C", team_id=1))
+    upsert_player(conn, _player_row(102, position="C", team_id=1))
+    upsert_player(conn, _player_row(201, position="G", team_id=2))
+
+    _seed_shot(conn, 915, 1, shooter_id=101, goalie_id=201, shooting_team_id=1)
+    _seed_shot(conn, 915, 2, shooter_id=102, goalie_id=201, shooting_team_id=1)
+    populate_player_game_stats(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT player_id FROM player_game_stats "
+        "WHERE game_id = 915 ORDER BY player_id"
+    )
+    assert [r[0] for r in cur.fetchall()] == [101, 102, 201]
+
+    delete_game_shot_events(conn, 915)
+    _seed_shot(conn, 915, 1, shooter_id=101, goalie_id=201, shooting_team_id=1)
+    populate_player_game_stats(conn)
+
+    cur.execute(
+        "SELECT player_id FROM player_game_stats "
+        "WHERE game_id = 915 ORDER BY player_id"
+    )
+    assert [r[0] for r in cur.fetchall()] == [101, 201]
