@@ -866,6 +866,8 @@ def backfill_player_metadata(conn, fetch_fn, batch_size=50):
     Returns (attempted, upserted, unavailable) counts.
     """
     missing_ids = get_missing_player_ids(conn)
+    total_missing = len(missing_ids)
+    print(f"Fetching metadata for {total_missing} players")
     attempted = 0
     upserted = 0
     unavailable = 0
@@ -874,6 +876,8 @@ def backfill_player_metadata(conn, fetch_fn, batch_size=50):
 
     for player_id in missing_ids:
         attempted += 1
+        if attempted % batch_size == 0:
+            print(f"  player metadata: [{attempted}/{total_missing}]")
         try:
             row = fetch_fn(player_id)
         except PlayerMetadataNotFound:
