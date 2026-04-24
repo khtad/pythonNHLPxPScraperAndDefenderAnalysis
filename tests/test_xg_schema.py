@@ -100,6 +100,7 @@ def test_shot_events_table_has_expected_columns(conn):
         "shot_event_id",
         "game_id",
         "event_idx",
+        "shot_event_type",
         "period",
         "time_in_period",
         "time_remaining_seconds",
@@ -161,6 +162,7 @@ def _insert_shot(cur, overrides=None, version=None):
     defaults = {
         "game_id": 2023020001,
         "event_idx": 1,
+        "shot_event_type": "shot-on-goal",
         "period": 1,
         "time_in_period": "10:00",
         "time_remaining_seconds": 600,
@@ -195,6 +197,7 @@ def test_validate_shot_events_quality_clean_data_returns_no_errors(conn):
     conn.commit()
 
     report = validate_shot_events_quality(conn)
+    assert report["invalid_shot_event_type_rows"] == 0
     assert report["invalid_shot_type_rows"] == 0
     assert report["invalid_manpower_state_rows"] == 0
     assert report["invalid_score_state_rows"] == 0
@@ -329,8 +332,8 @@ def test_valid_manpower_states_contains_pulled_goalie_states():
     assert required.issubset(set(VALID_MANPOWER_STATES))
 
 
-def test_xg_event_schema_version_is_v4():
-    assert _XG_EVENT_SCHEMA_VERSION == "v4"
+def test_xg_event_schema_version_is_v5():
+    assert _XG_EVENT_SCHEMA_VERSION == "v5"
 
 
 # ── Phase 1: migration ────────────────────────────────────────────────
