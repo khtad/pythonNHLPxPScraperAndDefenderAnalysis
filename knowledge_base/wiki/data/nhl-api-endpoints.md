@@ -95,6 +95,7 @@ A legacy API base URL (`https://statsapi.web.nhl.com/api/v1/`) was used by many 
 
 - The client enforces a 2-second minimum interval between play-by-play requests via `_rate_limited_game_api_get()` [1].
 - Non-200 responses return `None`, and the caller skips the game.
+- Transport-layer failures (`requests.RequestException`, e.g., transient proxy/connectivity errors) are caught in `_api_get_with_status()` and treated as retryable misses instead of hard crashes [1].
 - The `requests.Session` is configured with a `User-Agent` header (`"Mozilla/5.0"`) [1].
 - Connection reuse via the session avoids TCP+TLS overhead per request, per the `CLAUDE.md` guardrail requiring `requests.Session` over bare `requests.get()`.
 
@@ -104,7 +105,7 @@ These three endpoints are the sole data source for the entire project. The scrap
 
 The `homeTeamDefendingSide` era gap is the project's most significant data quality issue, affecting ~1.3M shots (see [Coordinate System and Normalization](coordinate-system-and-normalization.md) for full details).
 
-Last verified: 2026-04-06
+Last verified: 2026-04-24
 
 ## Sources
 
@@ -122,6 +123,7 @@ Last verified: 2026-04-06
 
 ## Revision History
 
+- 2026-04-24 — Added transport-exception handling note for `_api_get_with_status()` and refreshed verification date.
 - 2026-04-20 — Added player landing endpoint section (roadmap Phase 2.5.1: player metadata pipeline).
 - 2026-04-08 — Added community documentation references (Zmalski, dword4) and legacy API note.
 - 2026-04-06 — Created. Compiled from nhl_api.py, main.py, and API response inspection.

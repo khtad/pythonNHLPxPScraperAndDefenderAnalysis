@@ -9,6 +9,7 @@ _GAME_API_MIN_INTERVAL = 2  # seconds between game API calls
 _USER_AGENT = "Mozilla/5.0"
 _HTTP_OK = 200
 _HTTP_NOT_FOUND = 404
+_HTTP_REQUEST_EXCEPTION_STATUS = 0
 _last_game_api_call = 0
 
 _session = requests.Session()
@@ -23,7 +24,11 @@ def _api_get_with_status(url, silent_status_codes=()):
     expected and routine (e.g., 404 for pre-modern player ids on the
     landing endpoint).
     """
-    response = _session.get(url)
+    try:
+        response = _session.get(url)
+    except requests.RequestException as exc:
+        print(f"Error fetching {url}. Request failed: {exc}")
+        return None, _HTTP_REQUEST_EXCEPTION_STATUS
     if response.status_code != _HTTP_OK:
         if response.status_code not in silent_status_codes:
             print(f"Error fetching {url}. Status code: {response.status_code}")

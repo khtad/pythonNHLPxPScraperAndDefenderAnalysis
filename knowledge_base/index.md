@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-04-20 (Phase 2.5.1: player metadata pipeline — player-landing endpoint, `players` dimension populated, `player_game_stats` seeded from shot_events)
+> Last updated: 2026-04-24 (Phase 2.5.4 in progress: venue correction layer baseline implemented; NHL API transport-exception handling documented)
 
 ## Concepts
 

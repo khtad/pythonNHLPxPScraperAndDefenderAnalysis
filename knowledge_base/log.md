@@ -154,3 +154,13 @@
 **Notes:** Pipeline derives shooter/goalie ids from `shot_events`, fetches each missing player from `/v1/player/{id}/landing`, and upserts into the `players` dimension. `populate_player_game_stats` derives per-game counting stats (shots, goals) from `shot_events` and infers goalie `team_id` via the opponent of `shooting_team_id` in the `games` table. TOI and non-shot counters remain at their NOT NULL DEFAULT 0 values until shifts/boxscore data arrive in later phases — acceptable under `validate_player_game_stats_quality`. No new articles; no schema version bump (player tables are not derived-shot tables with a version column). Wiki counts unchanged.
 
 
+
+### 2026-04-24 — UPDATE
+
+**Action:** Updated wiki after venue correction baseline implementation and API transport-error hardening
+**Source:** `src/database.py` (`create_venue_bias_corrections_table`, `populate_venue_bias_corrections`, `load_game_shots_with_venue_correction`), `src/main.py` (`finalize_season_diagnostics` correction call), `src/nhl_api.py` (`_api_get_with_status` transport exception handling), `docs/xg_model_roadmap.md`
+**Pages touched:**
+- Updated `wiki/concepts/venue-scorekeeper-bias.md` — changed status from “correction planned” to “initial correction layer implemented”; documented shrinkage-based distance adjustment flow, storage in `venue_bias_corrections`, and remaining held-out acceptance requirements.
+- Updated `wiki/data/nhl-api-endpoints.md` — documented `_api_get_with_status` behavior for `requests.RequestException` transport failures.
+- Updated `index.md` — bumped last-updated date and summary line.
+**Notes:** No new wiki pages created. This update records implementation-state changes in project code and roadmap status; empirical venue-bias statistics remain data-version-dependent and still require the held-out validation pass defined in Phase 2.5.4 acceptance criteria.

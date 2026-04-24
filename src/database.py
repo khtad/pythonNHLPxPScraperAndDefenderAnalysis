@@ -1493,6 +1493,10 @@ def compute_league_season_stats(conn, season):
 
 
 _VENUE_BIAS_Z_SCORE_THRESHOLD = 2.0
+_VENUE_CORRECTION_MIN_SHOTS = 400
+_VENUE_CORRECTION_PRIOR_SHOTS = 2000
+_VENUE_CORRECTION_METHOD = "distance_mean_shrinkage_v1"
+_MIN_CORRECTED_DISTANCE_TO_GOAL = 0.0
 
 
 def populate_venue_diagnostics(conn, season):
@@ -1552,6 +1556,165 @@ def populate_venue_diagnostics(conn, season):
     conn.commit()
 
 
+def create_venue_bias_corrections_table(conn):
+    """Create per-venue correction parameters used at inference/training time."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS venue_bias_corrections (
+            venue_name TEXT NOT NULL,
+            season TEXT NOT NULL,
+            correction_method TEXT NOT NULL,
+            min_shots_required INTEGER NOT NULL,
+            shrinkage_prior_shots REAL NOT NULL,
+            sample_shots INTEGER NOT NULL,
+            raw_distance_delta REAL,
+            shrinkage_weight REAL,
+            distance_adjustment REAL,
+            PRIMARY KEY (venue_name, season, correction_method)
+        )
+        """
+    )
+    conn.commit()
+
+
+def _compute_shrinkage_weight(sample_shots, prior_shots):
+    """Return partial-pooling weight in [0, 1]."""
+    if sample_shots <= 0 or prior_shots <= 0:
+        return 0.0
+    return sample_shots / (sample_shots + prior_shots)
+
+
+def _clamp_corrected_distance(distance_to_goal):
+    """Distance-to-goal cannot be negative after correction."""
+    if distance_to_goal is None:
+        return None
+    return max(_MIN_CORRECTED_DISTANCE_TO_GOAL, distance_to_goal)
+
+
+def populate_venue_bias_corrections(
+        conn,
+        season,
+        min_shots_required=_VENUE_CORRECTION_MIN_SHOTS,
+        shrinkage_prior_shots=_VENUE_CORRECTION_PRIOR_SHOTS):
+    """Populate venue-season correction parameters for one season.
+
+    Correction is an additive distance adjustment toward league average.
+    The raw venue delta is shrunk toward 0 using a sample-size-dependent
+    weight to avoid over-correcting low-sample venues.
+    """
+    create_venue_bias_corrections_table(conn)
+    league = compute_league_season_stats(conn, season)
+    league_avg_distance = league["avg_distance"]
+    if league["total_shots"] == 0 or league_avg_distance is None:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM venue_bias_corrections WHERE season = ? AND correction_method = ?",
+            (season, _VENUE_CORRECTION_METHOD),
+        )
+        conn.commit()
+        return 0
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT venue_name, total_shots, avg_distance "
+        "FROM venue_bias_diagnostics WHERE season = ?",
+        (season,),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        populate_venue_diagnostics(conn, season)
+        cursor.execute(
+            "SELECT venue_name, total_shots, avg_distance "
+            "FROM venue_bias_diagnostics WHERE season = ?",
+            (season,),
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            cursor.execute(
+                "DELETE FROM venue_bias_corrections WHERE season = ? AND correction_method = ?",
+                (season, _VENUE_CORRECTION_METHOD),
+            )
+            conn.commit()
+            return 0
+
+    inserts = []
+    for venue_name, sample_shots, venue_avg_distance in rows:
+        if venue_avg_distance is None:
+            continue
+        if sample_shots < min_shots_required:
+            continue
+        raw_distance_delta = league_avg_distance - venue_avg_distance
+        shrinkage_weight = _compute_shrinkage_weight(
+            sample_shots, shrinkage_prior_shots
+        )
+        distance_adjustment = raw_distance_delta * shrinkage_weight
+        inserts.append(
+            (
+                venue_name, season, _VENUE_CORRECTION_METHOD,
+                min_shots_required, shrinkage_prior_shots, sample_shots,
+                raw_distance_delta, shrinkage_weight, distance_adjustment,
+            )
+        )
+
+    if not inserts:
+        cursor.execute(
+            "DELETE FROM venue_bias_corrections WHERE season = ? AND correction_method = ?",
+            (season, _VENUE_CORRECTION_METHOD),
+        )
+        conn.commit()
+        return 0
+
+    cursor.execute(
+        "DELETE FROM venue_bias_corrections WHERE season = ? AND correction_method = ?",
+        (season, _VENUE_CORRECTION_METHOD),
+    )
+    cursor.executemany(
+        """INSERT OR REPLACE INTO venue_bias_corrections
+           (venue_name, season, correction_method, min_shots_required,
+            shrinkage_prior_shots, sample_shots, raw_distance_delta,
+            shrinkage_weight, distance_adjustment)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        inserts,
+    )
+    conn.commit()
+    return len(inserts)
+
+
+def load_game_shots_with_venue_correction(conn, game_id):
+    """Return game shots with additive venue distance correction applied."""
+    shots = load_game_shots(conn, game_id)
+    if not shots:
+        return shots
+
+    season = shots[0].get("season")
+    venue_name = shots[0].get("venue_name")
+    if season is None or venue_name is None:
+        for row in shots:
+            row["distance_to_goal_corrected"] = row.get("distance_to_goal")
+        return shots
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT distance_adjustment
+           FROM venue_bias_corrections
+           WHERE venue_name = ? AND season = ? AND correction_method = ?""",
+        (venue_name, season, _VENUE_CORRECTION_METHOD),
+    )
+    correction_row = cursor.fetchone()
+    distance_adjustment = correction_row[0] if correction_row else 0.0
+
+    for row in shots:
+        original_distance = row.get("distance_to_goal")
+        if original_distance is None:
+            row["distance_to_goal_corrected"] = None
+            continue
+        row["distance_to_goal_corrected"] = _clamp_corrected_distance(
+            original_distance + distance_adjustment
+        )
+    return shots
+
+
 def _stddev(values, mean):
     """Compute population standard deviation given values and their mean."""
     if not values or len(values) < 2:
@@ -1568,6 +1731,7 @@ def ensure_xg_schema(conn):
     _migrate_games_add_venue_columns(conn)
     create_game_context_table(conn)
     create_venue_bias_diagnostics_table(conn)
+    create_venue_bias_corrections_table(conn)
     create_shifts_table(conn)
     create_on_ice_intervals_table(conn)
     create_player_team_history_table(conn)
