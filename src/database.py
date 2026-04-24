@@ -19,7 +19,7 @@ _FEATURE_SET_VERSION = "v1"
 
 # ── xG Phase 0: schema versions ──────────────────────────────────────
 
-_XG_EVENT_SCHEMA_VERSION = "v4"
+_XG_EVENT_SCHEMA_VERSION = "v5"
 _XG_FEATURE_SCHEMA_VERSION = "v1"
 _SHIFT_SCHEMA_VERSION = "v1"
 _ON_ICE_SCHEMA_VERSION = "v1"
@@ -65,6 +65,17 @@ VALID_SCORE_STATES = (
     "down1",
     "down2",
     "down3plus",
+)
+
+VALID_SHOT_EVENT_TYPES = (
+    "shot-on-goal",
+    "goal",
+    "missed-shot",
+    "blocked-shot",
+)
+BLOCKED_SHOT_EVENT_TYPE = "blocked-shot"
+ANALYSIS_SHOT_WHERE = (
+    f"(se.shot_event_type IS NULL OR se.shot_event_type != '{BLOCKED_SHOT_EVENT_TYPE}')"
 )
 
 # NHL rink normalized coordinate bounds (feet)
@@ -540,6 +551,7 @@ def create_shot_events_table(conn):
             shot_event_id INTEGER PRIMARY KEY AUTOINCREMENT,
             game_id INTEGER NOT NULL,
             event_idx INTEGER NOT NULL,
+            shot_event_type TEXT,
             period INTEGER NOT NULL,
             time_in_period TEXT NOT NULL,
             time_remaining_seconds INTEGER NOT NULL,
@@ -587,6 +599,8 @@ def validate_shot_events_quality(conn):
     cursor = conn.cursor()
     _t = "shot_events"
     return {
+        "invalid_shot_event_type_rows": _count_invalid_enum(
+            cursor, _t, "shot_event_type", VALID_SHOT_EVENT_TYPES, nullable=True),
         "invalid_shot_type_rows": _count_invalid_enum(
             cursor, _t, "shot_type", VALID_SHOT_TYPES),
         "invalid_manpower_state_rows": _count_invalid_enum(
@@ -652,8 +666,18 @@ def _migrate_shot_events_v3_to_v4(conn):
     conn.commit()
 
 
+def _migrate_shot_events_v4_to_v5(conn):
+    """Add shot_event_type so blocked shots can be filtered directly."""
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(shot_events)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    if "shot_event_type" not in existing_cols:
+        cursor.execute("ALTER TABLE shot_events ADD COLUMN shot_event_type TEXT")
+    conn.commit()
+
+
 _SHOT_EVENTS_INSERT_COLUMNS = (
-    "game_id", "event_idx", "period", "time_in_period",
+    "game_id", "event_idx", "shot_event_type", "period", "time_in_period",
     "time_remaining_seconds", "shot_type", "x_coord", "y_coord",
     "distance_to_goal", "angle_to_goal", "is_goal",
     "shooting_team_id", "goalie_id", "shooter_id",
@@ -1728,6 +1752,7 @@ def ensure_xg_schema(conn):
     create_shot_events_table(conn)
     _migrate_shot_events_v1_to_v2(conn)
     _migrate_shot_events_v3_to_v4(conn)
+    _migrate_shot_events_v4_to_v5(conn)
     _migrate_games_add_venue_columns(conn)
     create_game_context_table(conn)
     create_venue_bias_diagnostics_table(conn)

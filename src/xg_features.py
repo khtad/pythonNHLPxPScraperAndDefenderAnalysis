@@ -8,6 +8,7 @@ import math
 from database import VALID_MANPOWER_STATES
 
 SHOT_EVENT_TYPE_KEYS = ("shot-on-goal", "goal", "missed-shot", "blocked-shot")
+BLOCKED_SHOT_EVENT_TYPE = "blocked-shot"
 FACEOFF_EVENT_TYPE_KEY = "faceoff"
 GOAL_X_COORD = 89.0
 GOAL_Y_COORD = 0.0
@@ -262,6 +263,7 @@ def extract_shot_events(game_data):
         shot_events.append({
             "game_id": game_id,
             "event_idx": event_id,
+            "shot_event_type": type_key,
             "period": period,
             "time_in_period": time_in_period,
             "time_remaining_seconds": time_remaining_seconds,

@@ -580,6 +580,7 @@ def test_extract_shot_events_blocked_shot():
     events = extract_shot_events(game_data)
     assert len(events) == 1
     assert events[0]["is_goal"] == 0
+    assert events[0]["shot_event_type"] == "blocked-shot"
     assert events[0]["shooter_id"] == 100
     assert events[0]["goalie_id"] is None  # no goalie for blocked shots
 
