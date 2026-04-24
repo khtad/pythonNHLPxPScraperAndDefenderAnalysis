@@ -159,6 +159,27 @@ player-schema bootstrap
      - When adding new scraper/backfill steps that perform network calls during `main()` integration tests, ensure the network path is mockable and degrades gracefully to a no-op on transient failures.
      - Add at least one unit test that simulates `requests.RequestException` for each API helper family to lock in retryable behavior.
 
+7. **Failure:** PowerShell inspection commands using `python` and `py -3` failed on the Windows Codex desktop thread (`python` was not on PATH and `py` pointed at an unusable WindowsApps target).
+   - **Cause:** The local shell environment did not expose a working Python interpreter directly, and the launcher registration was stale/broken for stdin-driven one-off scripts.
+   - **Fix:** Call `load_workspace_dependencies` and invoke the bundled interpreter path it returns (for example `C:\Users\...\dependencies\python\python.exe`) instead of assuming `python` or `py` will work.
+   - **Rules to avoid repeat failures of this type:**
+     - On Codex desktop Windows threads, do not assume `python` is available on PATH. Verify the interpreter first or use the bundled runtime path from `load_workspace_dependencies`.
+     - If a quick inspection/query script needs Python in this environment, prefer the bundled interpreter returned by `load_workspace_dependencies` over `py -3`, especially for stdin-piped scripts.
+
+8. **Failure:** The repository-local Windows venv launcher (`.venv\Scripts\python.exe`) failed with `No Python at '"/usr/bin\python.exe'`.
+   - **Cause:** The checked-in `.venv` was created from a WSL/Linux interpreter, so `pyvenv.cfg` points at `/usr/bin/python3.12` and the Windows launcher cannot resolve that home interpreter.
+   - **Fix:** Inspect `.venv\pyvenv.cfg` before relying on a repo-local venv on Windows. If `home` or `executable` points at a Unix path, treat the venv as unusable from Windows and use another interpreter or recreate the venv in the current OS.
+   - **Rules to avoid repeat failures of this type:**
+     - On Windows, do not assume `.venv\Scripts\python.exe` is valid just because the file exists. Check `.venv\pyvenv.cfg` when the workspace may have been shared across WSL/Linux and Windows.
+     - If a repo-local venv is cross-OS broken, do not spend time debugging package imports inside it. Switch to a known-good interpreter or recreate the venv for the active platform.
+
+9. **Failure:** Git commands failed with `fatal: detected dubious ownership in repository` on the Windows Codex desktop thread.
+   - **Cause:** The current shell user SID did not match the repository owner's SID, so Git's safe-directory protection blocked status/diff commands.
+   - **Fix:** If Git metadata is required, add the repository path to Git's safe-directory list after user approval (for example `git config --global --add safe.directory <repo>`). If approval is not available, fall back to direct file inspection for verification.
+   - **Rules to avoid repeat failures of this type:**
+     - On Windows Codex desktop threads, do not assume Git commands will work even for read-only status checks. If you see a dubious-ownership error, stop relying on Git output until the repo is marked safe.
+     - Treat `git config --global --add safe.directory ...` as an environment mutation that needs user approval; do not apply it silently.
+
 ## Derived-Data Versioning & Backfill
 
 Each derived table stores a schema version in every row, recording which code version produced it:
