@@ -23,6 +23,7 @@ _XG_EVENT_SCHEMA_VERSION = "v4"
 _XG_FEATURE_SCHEMA_VERSION = "v1"
 _SHIFT_SCHEMA_VERSION = "v1"
 _ON_ICE_SCHEMA_VERSION = "v1"
+_MIN_TRAINING_SEASON = "20092010"
 
 # ── xG Phase 0: data-contract constants ──────────────────────────────
 
@@ -137,6 +138,33 @@ def load_game_shots(conn, game_id):
            WHERE se.game_id = ?
            ORDER BY se.event_idx""",
         (game_id,),
+    )
+    columns = [desc[0] for desc in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def load_training_shot_events(conn, min_season=_MIN_TRAINING_SEASON):
+    """Return model-training shot rows for seasons at/after ``min_season``.
+
+    This enforces the Phase 2.5.5 pre-2009 triage decision: pre-2009 seasons
+    are excluded from model training inputs. The query also enforces non-null
+    geometric features required for baseline xG fitting.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT se.game_id, se.event_idx, g.season,
+                  se.shot_type, se.distance_to_goal, se.angle_to_goal,
+                  se.manpower_state, se.score_state, se.is_goal
+           FROM shot_events se
+           JOIN games g ON se.game_id = g.game_id
+           WHERE se.event_schema_version = ?
+             AND g.season IS NOT NULL
+             AND g.season >= ?
+             AND se.distance_to_goal IS NOT NULL
+             AND se.angle_to_goal IS NOT NULL
+             AND se.shot_type IS NOT NULL
+           ORDER BY g.season, se.game_id, se.event_idx""",
+        (_XG_EVENT_SCHEMA_VERSION, str(min_season)),
     )
     columns = [desc[0] for desc in cursor.description]
     return [dict(zip(columns, row)) for row in cursor.fetchall()]

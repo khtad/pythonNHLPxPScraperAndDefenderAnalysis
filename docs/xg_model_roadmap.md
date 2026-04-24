@@ -101,7 +101,7 @@ Status here is verified against the live database, not just self-reported from p
 | Phase 0 — contracts, schema, reproducibility | **Complete** | `_XG_EVENT_SCHEMA_VERSION = "v3"` (`src/database.py:21`); all 2,099,820 shots in `shot_events` are at v3; version-aware backfill (`game_has_current_shot_events`, `delete_game_shot_events`) present; `validate_shot_events_quality` covers enums/ranges/duplicates. |
 | Phase 1 — event/state foundation | **Complete** | `normalize_coordinates`, distance/angle, 10-type shot taxonomy, score/manpower/time classifiers in `src/xg_features.py`. Pre-2020 negative-x rate is now 0.0 (was ~50% at v2). Pre-event score tracker `_track_score` prevents post-goal leakage. |
 | Phase 2 — context feature engineering | **Complete (with two criteria formally deferred)** | `game_context` populated (26,343 rows at v1) with rest/travel/timezone features; `validate_game_context_quality` added. Faceoff decay bins implemented. `populate_venue_diagnostics` is wired into the scraper pipeline via `finalize_season_diagnostics` and runs per season. VIF review done on live data (see below). The two remaining acceptance criteria — held-out faceoff-decay validation and zone-start change-on-the-fly inference — are formally deferred to their gating dependencies: Phase 2.5.2 (`src/validation.py` helpers) and a future shifts-ingestion branch, respectively. |
-| Phase 2.5 — rigor foundation (new, gates Phase 3) | **In progress** | 2.5.1 and 2.5.2 are implemented in `src/` with tests; 2.5.4 now has an initial correction table (`venue_bias_corrections`) and shrinkage-based distance adjustment parameters wired into `finalize_season_diagnostics`. 2.5.3 and 2.5.5 remain open. |
+| Phase 2.5 — rigor foundation (new, gates Phase 3) | **In progress** | 2.5.1 and 2.5.2 are implemented in `src/` with tests; 2.5.4 now has an initial correction table (`venue_bias_corrections`) and shrinkage-based distance adjustment parameters wired into `finalize_season_diagnostics`; 2.5.5 now has a recorded decision and an enforced loader guard (`load_training_shot_events`) excluding pre-2009 seasons. 2.5.3 remains open. |
 | Phase 3 — baseline xG model | **Not started** | No training code in `src/`. Validation framework exists only as notebook cells in `notebooks/model_validation_framework.ipynb` (scaffolding; never executed end-to-end on live data per `knowledge_base/log.md` 2026-04-07). |
 | Phase 4 — enhanced xG model | **Not started** | Depends on Phase 3. |
 | Phase 5 — RAPM on xG | **Blocked on data** | `players` dim has **0 rows**; `player_game_stats` and `player_game_features` are empty; no player/roster endpoint in `src/nhl_api.py`. |
@@ -110,7 +110,7 @@ Status here is verified against the live database, not just self-reported from p
 ### Critical blockers (must close before Phase 3 modeling is meaningful)
 
 1. **`players` dim is empty (0 rows).** Blocks handedness features (off-wing flag, effective-angle interactions), `player_game_stats`, `player_game_features`, and every step of RAPM. No player metadata endpoint exists in `src/nhl_api.py`.
-2. **2007–2008 shot-distance anomaly.** Average `distance_to_goal` for 2007–08 is ~19–20 units vs ~34 for 2009+. `wrap-around` and `deflected` shots have `NULL` distances in 2007–08 (coordinates absent in that era). This is a residual data-quality issue beyond the v2→v3 fix and must be triaged (exclude, repair, or tier) before training data is assembled.
+2. **2007–2008 shot-distance anomaly.** Average `distance_to_goal` for 2007–08 is ~19–20 units vs ~34 for 2009+. `wrap-around` and `deflected` shots have `NULL` distances in 2007–08 (coordinates absent in that era). **Phase 2.5.5 decision:** exclude pre-2009 seasons from model-training inputs; enforced by `load_training_shot_events` and test coverage.
 3. **Venue bias correction needs held-out validation.** The project now computes season-level correction parameters in `venue_bias_corrections` via `populate_venue_bias_corrections` (shrinkage toward league distance mean) and runs it from `finalize_season_diagnostics`. The remaining gap is validation and policy selection (e.g., shrinkage prior tuning vs CDF matching/hierarchical intercepts) against held-out log-loss and over-correction guardrails (Phase 2.5.4 acceptance criteria).
 4. **Validation framework is unvalidated.** The helpers (`bootstrap_goal_rate_ci`, `cohens_h`, `hosmer_lemeshow_test`, `calibration_slope_intercept`, `run_temporal_cv`) live only inside `notebooks/model_validation_framework.ipynb`. They are not importable from `src/` and the notebook has never been executed against the live v3 database.
 
@@ -255,12 +255,12 @@ Acceptance:
 ### 2.5.5 Pre-2009 data-quality triage
 
 - Investigate the 2007–08 shot-distance anomaly (avg distance ~19–20 vs ~34 for 2009+; NULL distances for `wrap-around` and `deflected` shots in those seasons).
-- Decide among: (a) exclude pre-2009 seasons from training; (b) repair via coordinate recovery from raw event rows; (c) add a `data_quality_tier` column to `shot_events` and weight training accordingly.
+- **Decision (2026-04-24): choose option (a)** — exclude pre-2009 seasons from model training for the baseline xG path. Rationale: pre-2009 shot coordinates are structurally incomplete in the source feed, so distance/angle repair would require non-trivial reconstruction assumptions that are out of scope for Phase 2.5 and risk introducing synthetic bias. This exclusion is now enforced in `src/database.py::load_training_shot_events` with tests in `tests/test_database.py`.
 
 Acceptance:
-- Written decision recorded in this roadmap or in component 01.
+- ✅ Written decision recorded in this roadmap.
 - If pre-2009 data is kept for training, no NULL `distance_to_goal` in the final training input.
-- If excluded, the exclusion is enforced in the model's training-data loader with a test.
+- ✅ If excluded, the exclusion is enforced in the model's training-data loader with a test.
 
 ## Phase 3: Baseline xG model
 

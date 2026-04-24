@@ -29,6 +29,7 @@ from database import (
     is_date_range_collected,
     is_game_collected,
     load_game_shots,
+    load_training_shot_events,
     mark_date_collected,
     mark_players_metadata_unavailable,
     populate_player_game_stats,
@@ -557,6 +558,27 @@ def test_load_game_shots_empty_game(conn):
         home_team_id=1, away_team_id=2,
     )
     assert load_game_shots(conn, 802) == []
+
+
+def test_load_training_shot_events_excludes_pre_2009_seasons(conn):
+    _seed_game_env(conn)
+    _seed_game(conn, 810, "20082009", n_shots=1)
+    _seed_game(conn, 811, "20092010", n_shots=1)
+
+    rows = load_training_shot_events(conn)
+
+    assert [(r["game_id"], r["season"]) for r in rows] == [(811, "20092010")]
+
+
+def test_load_training_shot_events_excludes_null_distance_rows(conn):
+    _seed_game_env(conn)
+    _seed_game(conn, 812, "20092010", n_shots=1)
+    insert_shot_events(conn, [_shot_dict(812, 99, distance_to_goal=None)])
+
+    rows = load_training_shot_events(conn)
+
+    assert all(r["distance_to_goal"] is not None for r in rows)
+    assert [r["event_idx"] for r in rows] == [0]
 
 
 def test_create_shifts_table_creates_expected_columns(conn):
