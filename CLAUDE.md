@@ -151,6 +151,14 @@ player-schema bootstrap
      - The canonical test command is authoritative and must list all `--ignore` flags for files whose dependencies are not in the base venv install. Update it whenever a new such file is added.
      - Any test file that imports `numpy`, `pandas`, `scipy`, or other heavy data-science packages at module scope must either guard with `pytest.importorskip("<name>")` or be added to `--ignore` in the canonical command.
 
+6. **Failure:** `requests.exceptions.ProxyError` during unit tests in `tests/test_main.py` when `main.refresh_player_tables()` attempted live calls to `https://api-web.nhle.com/v1/player/{id}/landing`.
+   - **Cause:** `_api_get_with_status` in `src/nhl_api.py` handled non-200 HTTP responses but did not catch transport-layer exceptions (`RequestException`). In the sandbox/proxy environment, those exceptions propagated and failed tests that did not mock player metadata fetches.
+   - **Fix:** Wrapped `_session.get(url)` in `try/except requests.RequestException` and returned `(None, 0)` after logging, so callers treat transport failures as retryable transient misses (same behavior as other non-200 failures). Added a regression test `test_get_game_ids_for_date_handles_request_exception`.
+   - **Rules to avoid repeat failures of this type:**
+     - Every HTTP helper must handle both HTTP status failures **and** transport exceptions. Do not allow raw `RequestException` to bubble out of low-level fetch wrappers.
+     - When adding new scraper/backfill steps that perform network calls during `main()` integration tests, ensure the network path is mockable and degrades gracefully to a no-op on transient failures.
+     - Add at least one unit test that simulates `requests.RequestException` for each API helper family to lock in retryable behavior.
+
 ## Derived-Data Versioning & Backfill
 
 Each derived table stores a schema version in every row, recording which code version produced it:

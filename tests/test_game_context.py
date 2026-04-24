@@ -7,6 +7,7 @@ from database import (
     _VENUE_BIAS_Z_SCORE_THRESHOLD,
     create_core_dimension_tables,
     create_game_context_table,
+    create_venue_bias_corrections_table,
     create_venue_bias_diagnostics_table,
     create_shot_events_table,
     ensure_xg_schema,
@@ -18,6 +19,8 @@ from database import (
     compute_venue_season_stats,
     compute_league_season_stats,
     populate_venue_diagnostics,
+    populate_venue_bias_corrections,
+    load_game_shots_with_venue_correction,
     validate_game_context_quality,
     _migrate_games_add_venue_columns,
     _stddev,
@@ -31,6 +34,7 @@ def conn():
     create_shot_events_table(connection)
     create_game_context_table(connection)
     create_venue_bias_diagnostics_table(connection)
+    create_venue_bias_corrections_table(connection)
     yield connection
     connection.close()
 
@@ -262,6 +266,12 @@ def test_venue_bias_diagnostics_has_expected_columns(conn):
     assert expected.issubset(cols)
 
 
+def test_create_venue_bias_corrections_table(conn):
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='venue_bias_corrections'")
+    assert cur.fetchone() is not None
+
+
 # ── _stddev ─────────────────────────────────────────────────────────
 
 
@@ -376,6 +386,87 @@ def test_populate_venue_diagnostics_idempotent(conn):
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM venue_bias_diagnostics WHERE season = '20242025'")
     assert cur.fetchone()[0] == 1
+
+
+def test_populate_venue_bias_corrections_skips_small_samples(conn):
+    upsert_game_metadata(conn, 1, "2024-10-08", "20242025", 10, 8, venue_name="Arena A")
+    _insert_shot_for_venue(conn, 1, 1, 70.0, 10.0, 30.0)
+    populate_venue_diagnostics(conn, "20242025")
+
+    inserted = populate_venue_bias_corrections(conn, "20242025")
+    assert inserted == 0
+
+
+def test_populate_venue_bias_corrections_inserts_rows(conn):
+    upsert_game_metadata(conn, 1, "2024-10-08", "20242025", 10, 8, venue_name="Arena A")
+    upsert_game_metadata(conn, 2, "2024-10-09", "20242025", 6, 5, venue_name="Arena B")
+    for event_idx in range(1, 501):
+        _insert_shot_for_venue(conn, 1, event_idx, 72.0, 3.0, 22.0)
+    for event_idx in range(501, 1001):
+        _insert_shot_for_venue(conn, 2, event_idx, 73.0, -2.0, 33.0)
+    populate_venue_diagnostics(conn, "20242025")
+
+    inserted = populate_venue_bias_corrections(conn, "20242025")
+    assert inserted == 2
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT COUNT(*) FROM venue_bias_corrections "
+        "WHERE season = ?",
+        ("20242025",),
+    )
+    assert cur.fetchone()[0] == 2
+
+
+def test_populate_venue_bias_corrections_replaces_stale_rows(conn):
+    upsert_game_metadata(conn, 1, "2024-10-08", "20242025", 10, 8, venue_name="Arena A")
+    upsert_game_metadata(conn, 2, "2024-10-09", "20242025", 6, 5, venue_name="Arena B")
+    for event_idx in range(1, 501):
+        _insert_shot_for_venue(conn, 1, event_idx, 72.0, 3.0, 22.0)
+    for event_idx in range(501, 1001):
+        _insert_shot_for_venue(conn, 2, event_idx, 73.0, -2.0, 33.0)
+    populate_venue_diagnostics(conn, "20242025")
+    inserted = populate_venue_bias_corrections(conn, "20242025")
+    assert inserted == 2
+
+    cur = conn.cursor()
+    cur.execute("DELETE FROM venue_bias_diagnostics WHERE venue_name = ?", ("Arena B",))
+    conn.commit()
+
+    inserted = populate_venue_bias_corrections(conn, "20242025")
+    assert inserted == 1
+    cur.execute(
+        "SELECT COUNT(*) FROM venue_bias_corrections WHERE season = ?",
+        ("20242025",),
+    )
+    assert cur.fetchone()[0] == 1
+
+
+def test_populate_venue_bias_corrections_autofills_missing_diagnostics(conn):
+    upsert_game_metadata(conn, 1, "2024-10-08", "20242025", 10, 8, venue_name="Arena A")
+    upsert_game_metadata(conn, 2, "2024-10-09", "20242025", 6, 5, venue_name="Arena B")
+    for event_idx in range(1, 501):
+        _insert_shot_for_venue(conn, 1, event_idx, 72.0, 3.0, 22.0)
+    for event_idx in range(501, 1001):
+        _insert_shot_for_venue(conn, 2, event_idx, 73.0, -2.0, 33.0)
+
+    inserted = populate_venue_bias_corrections(conn, "20242025")
+    assert inserted == 2
+
+
+def test_load_game_shots_with_venue_correction_adds_corrected_distance(conn):
+    upsert_game_metadata(conn, 1, "2024-10-08", "20242025", 10, 8, venue_name="Arena A")
+    upsert_game_metadata(conn, 2, "2024-10-09", "20242025", 6, 5, venue_name="Arena B")
+    for event_idx in range(1, 501):
+        _insert_shot_for_venue(conn, 1, event_idx, 72.0, 3.0, 22.0)
+    for event_idx in range(501, 1001):
+        _insert_shot_for_venue(conn, 2, event_idx, 73.0, -2.0, 33.0)
+    populate_venue_diagnostics(conn, "20242025")
+    populate_venue_bias_corrections(conn, "20242025")
+
+    rows = load_game_shots_with_venue_correction(conn, 1)
+    assert rows
+    assert "distance_to_goal_corrected" in rows[0]
+    assert rows[0]["distance_to_goal_corrected"] != rows[0]["distance_to_goal"]
 
 
 # ── ensure_xg_schema integration ────────────────────────────────────

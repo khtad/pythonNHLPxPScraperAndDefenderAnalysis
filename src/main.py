@@ -17,6 +17,7 @@ from database import (create_table, insert_data, create_connection,
                       populate_player_game_stats,
                       populate_game_context,
                       populate_venue_diagnostics,
+                      populate_venue_bias_corrections,
                       get_collected_game_ids,
                       DATABASE_DIR, DATABASE_PATH)
 from xg_features import extract_shot_events, extract_game_metadata
@@ -132,6 +133,7 @@ def finalize_season_diagnostics(conn):
     seasons = [row[0] for row in cursor.fetchall()]
     for season in seasons:
         populate_venue_diagnostics(conn, season)
+        populate_venue_bias_corrections(conn, season)
     print(f"Populated venue diagnostics for {len(seasons)} seasons")
     return len(seasons)
 

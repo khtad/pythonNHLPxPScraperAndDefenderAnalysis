@@ -46,6 +46,12 @@ def test_get_game_ids_for_date_returns_empty_list_on_non_200(mock_get):
 
 
 @patch.object(nhl_api._session, "get")
+def test_get_game_ids_for_date_handles_request_exception(mock_get):
+    mock_get.side_effect = nhl_api.requests.RequestException("network down")
+    assert nhl_api.get_game_ids_for_date("2024-01-01") == []
+
+
+@patch.object(nhl_api._session, "get")
 def test_get_game_ids_for_date_returns_empty_list_when_no_matching_date(mock_get):
     mock_get.return_value = _mock_response(
         200,
