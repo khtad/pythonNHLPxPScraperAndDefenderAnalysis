@@ -94,6 +94,19 @@ def test_plot_shot_density_hexbin_runs(ax):
     assert mappable is not None
 
 
+def test_plot_shot_density_warns_when_extent_excludes_points(ax):
+    draw_half_rink(ax)
+    shots = [_make_shot(60, 0), _make_shot(-40, 0)]
+    with pytest.warns(UserWarning, match="outside extent"):
+        plot_shot_density(
+            ax,
+            shots,
+            method="hexbin",
+            extent=(0.0, 100.0, -42.5, 42.5),
+            colorbar=False,
+        )
+
+
 def test_plot_shot_density_heatmap_runs(ax):
     draw_half_rink(ax)
     shots = [_make_shot(60 + i % 20, (i % 17) - 8) for i in range(100)]
