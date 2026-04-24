@@ -44,6 +44,9 @@ HOSMER_LEMESHOW_ALPHA = 0.05
 
 _BOOTSTRAP_DEFAULT_SEED = 42
 _CALIBRATION_LOGIT_CLIP = 1e-10
+VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL = 0.5
+_VENUE_CORRECTION_MIN_BASELINE_ADVANTAGE = 1e-9
+_VENUE_CORRECTION_LOG_LOSS_TOLERANCE = 1e-12
 
 
 def bootstrap_goal_rate_ci(
@@ -188,3 +191,83 @@ def run_temporal_cv(
             "y_prob": y_prob,
         })
     return results
+
+
+def evaluate_venue_correction_holdout(
+    y_true: np.ndarray,
+    y_prob_baseline: np.ndarray,
+    y_prob_corrected: np.ndarray,
+    is_home_attempt: np.ndarray,
+    max_home_ice_advantage_removal: float = (
+        VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL
+    ),
+) -> Dict[str, Any]:
+    """Evaluate held-out venue-correction acceptance criteria.
+
+    Returns a metrics dict with two gate booleans:
+    - ``log_loss_non_worse_pass``: corrected log-loss is not worse than baseline.
+    - ``home_ice_guardrail_pass``: correction removes no more than the configured
+      fraction of baseline home-ice predicted goal-rate advantage.
+    """
+    y_true = np.asarray(y_true)
+    y_prob_baseline = np.asarray(y_prob_baseline, dtype=float)
+    y_prob_corrected = np.asarray(y_prob_corrected, dtype=float)
+    is_home_attempt = np.asarray(is_home_attempt).astype(bool)
+
+    n_rows = len(y_true)
+    if not (
+        len(y_prob_baseline) == n_rows
+        and len(y_prob_corrected) == n_rows
+        and len(is_home_attempt) == n_rows
+    ):
+        raise ValueError("All inputs must have equal length.")
+
+    if n_rows == 0:
+        raise ValueError("Inputs must contain at least one row.")
+
+    baseline_log_loss = float(log_loss(y_true, y_prob_baseline))
+    corrected_log_loss = float(log_loss(y_true, y_prob_corrected))
+    log_loss_delta = corrected_log_loss - baseline_log_loss
+    log_loss_non_worse_pass = (
+        log_loss_delta <= _VENUE_CORRECTION_LOG_LOSS_TOLERANCE
+    )
+
+    home_mask = is_home_attempt
+    away_mask = ~is_home_attempt
+    if home_mask.sum() == 0 or away_mask.sum() == 0:
+        raise ValueError("Both home and away rows are required.")
+
+    baseline_home_rate = float(y_prob_baseline[home_mask].mean())
+    baseline_away_rate = float(y_prob_baseline[away_mask].mean())
+    corrected_home_rate = float(y_prob_corrected[home_mask].mean())
+    corrected_away_rate = float(y_prob_corrected[away_mask].mean())
+
+    baseline_advantage = baseline_home_rate - baseline_away_rate
+    corrected_advantage = corrected_home_rate - corrected_away_rate
+
+    if baseline_advantage <= _VENUE_CORRECTION_MIN_BASELINE_ADVANTAGE:
+        advantage_removed_ratio = 0.0
+    else:
+        advantage_removed_ratio = (
+            baseline_advantage - corrected_advantage
+        ) / baseline_advantage
+    home_ice_guardrail_pass = (
+        advantage_removed_ratio <= max_home_ice_advantage_removal
+    )
+
+    overall_pass = log_loss_non_worse_pass and home_ice_guardrail_pass
+    return {
+        "n_rows": int(n_rows),
+        "baseline_log_loss": baseline_log_loss,
+        "corrected_log_loss": corrected_log_loss,
+        "log_loss_delta": float(log_loss_delta),
+        "log_loss_non_worse_pass": bool(log_loss_non_worse_pass),
+        "baseline_home_advantage": float(baseline_advantage),
+        "corrected_home_advantage": float(corrected_advantage),
+        "advantage_removed_ratio": float(advantage_removed_ratio),
+        "max_allowed_advantage_removed_ratio": float(
+            max_home_ice_advantage_removal
+        ),
+        "home_ice_guardrail_pass": bool(home_ice_guardrail_pass),
+        "overall_pass": bool(overall_pass),
+    }

@@ -18,9 +18,11 @@ from validation import (
     HOSMER_LEMESHOW_ALPHA,
     MIN_SHOTS_PER_CELL,
     MIN_TRAIN_SEASONS,
+    VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL,
     bootstrap_goal_rate_ci,
     calibration_slope_intercept,
     cohens_h,
+    evaluate_venue_correction_holdout,
     hosmer_lemeshow_test,
     run_temporal_cv,
 )
@@ -280,3 +282,52 @@ def test_min_shots_per_cell_is_documented_value():
 
 def test_min_train_seasons_is_documented_value():
     assert MIN_TRAIN_SEASONS == 3
+
+
+def test_venue_correction_guardrail_threshold_is_documented_value():
+    assert VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL == 0.5
+
+
+def test_evaluate_venue_correction_holdout_passes_when_both_gates_pass():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.90, 0.70, 0.40, 0.20, 0.60, 0.40, 0.40, 0.20])
+    corrected = np.array([0.85, 0.75, 0.35, 0.25, 0.55, 0.35, 0.35, 0.25])
+    result = evaluate_venue_correction_holdout(y_true, baseline, corrected, is_home)
+
+    assert result["log_loss_non_worse_pass"] is True
+    assert result["home_ice_guardrail_pass"] is True
+    assert result["overall_pass"] is True
+    assert result["advantage_removed_ratio"] <= VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL
+
+
+def test_evaluate_venue_correction_holdout_fails_when_log_loss_worsens():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.90, 0.70, 0.40, 0.20, 0.60, 0.40, 0.40, 0.20])
+    corrected = np.full_like(baseline, 0.50)
+    result = evaluate_venue_correction_holdout(y_true, baseline, corrected, is_home)
+
+    assert result["log_loss_non_worse_pass"] is False
+    assert result["overall_pass"] is False
+
+
+def test_evaluate_venue_correction_holdout_fails_home_ice_over_correction():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.85, 0.75, 0.35, 0.25, 0.65, 0.55, 0.45, 0.35])
+    corrected = np.array([0.72, 0.62, 0.22, 0.12, 0.68, 0.58, 0.48, 0.38])
+    result = evaluate_venue_correction_holdout(y_true, baseline, corrected, is_home)
+
+    assert result["home_ice_guardrail_pass"] is False
+    assert result["overall_pass"] is False
+
+
+def test_evaluate_venue_correction_holdout_raises_on_length_mismatch():
+    with pytest.raises(ValueError, match="equal length"):
+        evaluate_venue_correction_holdout(
+            np.array([1, 0]),
+            np.array([0.6]),
+            np.array([0.6, 0.4]),
+            np.array([True, False]),
+        )
