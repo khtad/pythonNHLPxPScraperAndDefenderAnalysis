@@ -234,6 +234,8 @@ Acceptance:
 
 - Execute `notebooks/model_validation_framework.ipynb` against the real database. This is the first end-to-end validation run; the notebook has never been exercised on live data.
 - Publish a committed scorecard artifact summarizing: base rate by season/manpower/era with CIs, feature ablation results, temporal CV metrics, calibration diagnostics, leakage-audit conclusions.
+- **Execution harness added (2026-04-24):** `scripts/export_validation_scorecard.py` now executes the notebook and extracts the `VALIDATION SCORECARD` block into `artifacts/validation_scorecard_latest.md`.
+- **Current blocker (2026-04-24):** this repository snapshot does not include `data/nhl_data.db`, so this environment cannot produce live metrics yet.
 
 Acceptance:
 - All pass/fail cells return concrete numbers (no NotImplemented / skipped cells).

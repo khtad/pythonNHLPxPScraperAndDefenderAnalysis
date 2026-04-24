@@ -164,3 +164,12 @@
 - Updated `wiki/data/nhl-api-endpoints.md` — documented `_api_get_with_status` behavior for `requests.RequestException` transport failures.
 - Updated `index.md` — bumped last-updated date and summary line.
 **Notes:** No new wiki pages created. This update records implementation-state changes in project code and roadmap status; empirical venue-bias statistics remain data-version-dependent and still require the held-out validation pass defined in Phase 2.5.4 acceptance criteria.
+
+### 2026-04-24 — UPDATE
+
+**Action:** Added explicit PR-precondition governance for knowledge-base maintenance
+**Source:** `CLAUDE.md` (Development Guardrails), `knowledge_base/SCHEMA.md`
+**Pages touched:**
+- Created `wiki/meta/knowledge-base-maintenance-workflow.md` — documented required pre-PR KB maintenance steps (wiki update, index refresh, and log entry) plus auditability requirement for no-change cases.
+- Updated `index.md` — added meta-page link and refreshed Last updated summary.
+**Notes:** Governance/documentation-only update. No empirical data claims changed and no `data-version` tags required.

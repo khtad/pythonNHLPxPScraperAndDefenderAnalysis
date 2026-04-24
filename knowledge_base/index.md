@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-04-24 (Phase 2.5.4 in progress: venue correction layer baseline implemented; NHL API transport-exception handling documented)
+> Last updated: 2026-04-24 (Added knowledge-base maintenance workflow and PR-precondition governance note)
 
 ## Concepts
 
@@ -42,6 +42,7 @@ _No articles yet._
 ## Meta
 
 - [Knowledge Gaps](wiki/meta/knowledge-gaps.md) — Concepts not yet covered, empty categories, pending data refreshes, and planned external source ingestion.
+- [Knowledge Base Maintenance Workflow](wiki/meta/knowledge-base-maintenance-workflow.md) — PR-gated process checklist for keeping wiki pages, index entries, and operation logs synchronized with project changes.
 
 ---
 
