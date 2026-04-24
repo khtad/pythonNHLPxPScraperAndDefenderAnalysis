@@ -5,6 +5,8 @@
 # by src/database.py:insert_shot_events (x_coord, y_coord, is_goal, period).
 # Does NOT open database connections.
 
+import warnings
+
 import numpy as np
 import matplotlib.patches as patches
 
@@ -76,6 +78,11 @@ _KDE_LEVELS = 10
 _KDE_BW_ADJUST = 1.0
 _DEFAULT_DENSITY_CMAP = "Reds"
 _DEFAULT_DENSITY_ALPHA = 0.85
+_DENSITY_EXTENT_WARNING = (
+    "plot_shot_density dropped {dropped_count} point(s) outside extent "
+    "x=[{xmin:.1f}, {xmax:.1f}], y=[{ymin:.1f}, {ymax:.1f}]. "
+    "For coordinate diagnostics, pass a broader extent."
+)
 
 _VALID_DENSITY_METHODS = ("hexbin", "heatmap", "kde")
 
@@ -305,6 +312,19 @@ def plot_shot_density(ax, shots, method="hexbin", cmap=_DEFAULT_DENSITY_CMAP,
     if extent is None:
         extent = _extent_from_ax(ax)
     xmin, xmax, ymin, ymax = extent
+    in_bounds = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
+    dropped_count = int((~in_bounds).sum())
+    if dropped_count > 0 and method in ("hexbin", "heatmap"):
+        warnings.warn(
+            _DENSITY_EXTENT_WARNING.format(
+                dropped_count=dropped_count,
+                xmin=xmin,
+                xmax=xmax,
+                ymin=ymin,
+                ymax=ymax,
+            ),
+            stacklevel=2,
+        )
 
     if method == "hexbin":
         bins = "log" if len(x) > _HEXBIN_LOG_SCALE_THRESHOLD else None
