@@ -64,20 +64,38 @@ def _run_command_with_progress(
         cmd,
         cwd=PROJECT_ROOT,
     )
-    next_progress_at = step_started_at + progress_interval_seconds
-    while True:
-        return_code = process.poll()
-        if return_code is not None:
-            break
+    try:
+        next_progress_at = step_started_at + progress_interval_seconds
+        while True:
+            return_code = process.poll()
+            if return_code is not None:
+                break
 
-        if (
-            progress_interval_seconds > 0
-            and time.monotonic() >= next_progress_at
-        ):
-            step_elapsed = _format_duration(time.monotonic() - step_started_at)
-            _progress(f"{label} still running after {step_elapsed}.", run_started_at)
-            next_progress_at = time.monotonic() + progress_interval_seconds
-        time.sleep(1.0)
+            if (
+                progress_interval_seconds > 0
+                and time.monotonic() >= next_progress_at
+            ):
+                step_elapsed = _format_duration(time.monotonic() - step_started_at)
+                _progress(
+                    f"{label} still running after {step_elapsed}.",
+                    run_started_at,
+                )
+                next_progress_at = time.monotonic() + progress_interval_seconds
+            time.sleep(1.0)
+    except BaseException:
+        if process.poll() is None:
+            _progress(f"{label} interrupted; terminating child process.", run_started_at)
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                _progress(
+                    f"{label} did not stop after terminate; killing child process.",
+                    run_started_at,
+                )
+                process.kill()
+                process.wait()
+        raise
 
     if return_code != 0:
         raise subprocess.CalledProcessError(return_code, cmd)
