@@ -59,11 +59,11 @@ Phase 2 also wired the per-season diagnostic populator into the scraper pipeline
 
 The initial correction layer is now implemented in `src/database.py` [5]. `populate_venue_bias_corrections(conn, season)` computes a per-venue distance adjustment toward the season league mean and shrinks it by sample size (`sample_shots / (sample_shots + prior)`), storing parameters in `venue_bias_corrections`. `finalize_season_diagnostics()` now runs both diagnostic and correction population each season [4]. At consumption time, `load_game_shots_with_venue_correction()` adds `distance_to_goal_corrected` using the persisted adjustment while preserving raw distance values [5].
 
-This is an implementation baseline, not final model policy: the roadmap still requires held-out validation (log-loss impact, residual z-score checks, and home-ice over-correction guardrail) before the correction approach is considered accepted for production xG training [2].
+This is an implementation baseline, not final model policy: the roadmap still requires held-out validation (log-loss impact, residual z-score checks, and home-ice over-correction guardrail) before the correction approach is considered accepted for production xG training [2]. The Phase 2.5.4 scorecard harness is now implemented: `evaluate_venue_correction_scorecard()` combines the three acceptance gates, and `scripts/export_venue_correction_validation.py` turns a metrics JSON payload into a Markdown validation artifact once the live database is current [6].
 
 The venue bias analysis is particularly sensitive to the v2 coordinate normalization bug. Pre-2020 data with ~50% unnormalized coordinates will produce spurious venue effects that are actually normalization failures. This analysis should be re-derived after the v3 backfill completes.
 
-Last verified: 2026-04-24
+Last verified: 2026-04-28
 
 ## Sources
 
@@ -72,6 +72,8 @@ Last verified: 2026-04-24
 [3] Schuckers & Curro rink bias correction — `knowledge_base/raw/external/2026-04-08_schuckers-curro-thor-digr.md`
 [4] Diagnostic populator wiring — `src/main.py` (`finalize_season_diagnostics()`), `src/database.py` (`populate_venue_diagnostics()`)
 [5] Venue correction implementation — `src/database.py` (`create_venue_bias_corrections_table()`, `populate_venue_bias_corrections()`, `load_game_shots_with_venue_correction()`)
+
+[6] Venue correction validation harness - `src/validation.py` (`evaluate_venue_correction_scorecard()`), `scripts/export_venue_correction_validation.py`, `tests/test_venue_correction_validation_export.py`
 
 ## Related Pages
 
@@ -82,6 +84,8 @@ Last verified: 2026-04-24
 - [Rink Event Visualization](../methods/rink-event-visualization.md) — plotting venue shot distributions on a rink surface for visual bias detection
 
 ## Revision History
+
+- 2026-04-28 - Added Phase 2.5.4 scorecard harness status and source references for held-out/log-loss, home-ice guardrail, and residual z-score validation gates.
 
 - 2026-04-24 — Updated status: initial venue correction layer now implemented (`venue_bias_corrections` + shrinkage-adjusted distance correction), and wired into seasonal finalization; documented remaining held-out validation requirements.
 - 2026-04-19 — Documented that Phase 2 wired `finalize_season_diagnostics` into the pipeline, so `venue_bias_diagnostics` is now populated on every scrape/backfill run. Source [4] added.

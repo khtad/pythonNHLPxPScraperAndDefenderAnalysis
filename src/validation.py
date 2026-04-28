@@ -20,7 +20,7 @@ them inline.
 
 from __future__ import annotations
 
-from typing import Iterable, List, Dict, Any, Sequence
+from typing import Iterable, List, Dict, Any, Mapping, Sequence
 
 import numpy as np
 from scipy import stats as sp_stats
@@ -45,6 +45,7 @@ HOSMER_LEMESHOW_ALPHA = 0.05
 _BOOTSTRAP_DEFAULT_SEED = 42
 _CALIBRATION_LOGIT_CLIP = 1e-10
 VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL = 0.5
+VENUE_CORRECTION_MAX_ABS_RESIDUAL_Z_SCORE = 2.0
 _VENUE_CORRECTION_MIN_BASELINE_ADVANTAGE = 1e-9
 _VENUE_CORRECTION_LOG_LOSS_TOLERANCE = 1e-12
 
@@ -271,3 +272,72 @@ def evaluate_venue_correction_holdout(
         "home_ice_guardrail_pass": bool(home_ice_guardrail_pass),
         "overall_pass": bool(overall_pass),
     }
+
+
+def evaluate_venue_correction_scorecard(
+    y_true: np.ndarray,
+    y_prob_baseline: np.ndarray,
+    y_prob_corrected: np.ndarray,
+    is_home_attempt: np.ndarray,
+    residual_venue_z_scores: Mapping[str, float] | Sequence[float],
+    max_home_ice_advantage_removal: float = (
+        VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL
+    ),
+    max_abs_residual_z_score: float = VENUE_CORRECTION_MAX_ABS_RESIDUAL_Z_SCORE,
+) -> Dict[str, Any]:
+    """Evaluate the Phase 2.5.4 venue-correction scorecard gates.
+
+    Combines the held-out log-loss and home-ice over-correction checks from
+    ``evaluate_venue_correction_holdout`` with the residual venue z-score gate
+    from the roadmap. ``residual_venue_z_scores`` may be either a mapping of
+    venue labels to post-correction residual z-scores or a plain sequence.
+    """
+    holdout = evaluate_venue_correction_holdout(
+        y_true,
+        y_prob_baseline,
+        y_prob_corrected,
+        is_home_attempt,
+        max_home_ice_advantage_removal=max_home_ice_advantage_removal,
+    )
+    residual_items = _coerce_residual_z_score_items(residual_venue_z_scores)
+    worst_venue, worst_residual_z_score = max(
+        residual_items,
+        key=lambda item: abs(item[1]),
+    )
+    max_abs_residual_z_score_observed = abs(worst_residual_z_score)
+    residual_z_score_pass = (
+        max_abs_residual_z_score_observed < max_abs_residual_z_score
+    )
+
+    result = dict(holdout)
+    result.update({
+        "n_venues": int(len(residual_items)),
+        "worst_residual_venue": worst_venue,
+        "max_abs_residual_z_score": float(max_abs_residual_z_score_observed),
+        "max_allowed_abs_residual_z_score": float(max_abs_residual_z_score),
+        "residual_z_score_pass": bool(residual_z_score_pass),
+        "overall_pass": bool(holdout["overall_pass"] and residual_z_score_pass),
+    })
+    return result
+
+
+def _coerce_residual_z_score_items(
+    residual_venue_z_scores: Mapping[str, float] | Sequence[float],
+) -> List[tuple[str, float]]:
+    """Return labeled residual z-score items, rejecting empty/invalid values."""
+    if isinstance(residual_venue_z_scores, Mapping):
+        items = [
+            (str(venue_name), float(z_score))
+            for venue_name, z_score in residual_venue_z_scores.items()
+        ]
+    else:
+        items = [
+            (f"venue_{idx}", float(z_score))
+            for idx, z_score in enumerate(residual_venue_z_scores)
+        ]
+
+    if not items:
+        raise ValueError("At least one residual venue z-score is required.")
+    if any(not np.isfinite(z_score) for _, z_score in items):
+        raise ValueError("Residual venue z-scores must be finite numbers.")
+    return items

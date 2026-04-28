@@ -183,3 +183,12 @@
 - Updated `wiki/data/nhl-api-shot-events.md` — refreshed the schema description to v5, added `shot_event_type` and on-ice slot documentation, and recorded the partial v5 coverage blocker for validation-scorecard export.
 - Updated `index.md` — bumped Last updated date and summary line.
 **Notes:** Prevents repeat omissions by making KB maintenance a visible work item and an executable preflight. The validation-scorecard branch safely promoted 1,574,298 local `shot_events` rows from v4 to v5, but 546,702 remain stale; 507,543 of those are otherwise training-eligible post-2009 complete-geometry rows, so live Phase 2.5.3 scorecard export remains blocked until current-schema coverage is complete.
+
+### 2026-04-28 - UPDATE
+
+**Action:** Added Phase 2.5.4 venue-correction validation scorecard harness
+**Source:** `src/validation.py` (`evaluate_venue_correction_scorecard`), `scripts/export_venue_correction_validation.py`, `tests/test_validation.py`, `tests/test_venue_correction_validation_export.py`, `docs/xg_model_roadmap.md`, `docs/xg_model_components/04_scorekeeper_bias.md`
+**Pages touched:**
+- Updated `wiki/concepts/venue-scorekeeper-bias.md` - documented the new scorecard harness that combines held-out log-loss, home-ice over-correction, and residual venue z-score gates before accepting venue correction for xG training.
+- Updated `index.md` - bumped Last updated date and summary line.
+**Notes:** DB-independent harness work only. Live Phase 2.5.4 metrics still wait on the v5 database update and a future metrics-generation run.

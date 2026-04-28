@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-04-28 (Added KB preflight guardrail and refreshed shot-event schema status for v5 validation-scorecard readiness)
+> Last updated: 2026-04-28 (Added KB preflight guardrail, refreshed shot-event schema status, and added Phase 2.5.4 venue-correction validation scorecard harness)
 
 ## Concepts
 

@@ -249,6 +249,7 @@ Acceptance:
   - **Hierarchical venue intercepts:** add a partially-pooled venue-season intercept to the xG model, shrinking toward a league prior.
 - Implement one approach; decision recorded.
 - **Guardrail evaluator added (2026-04-24):** `src/validation.py::evaluate_venue_correction_holdout` now computes held-out log-loss delta and the share of baseline home-ice advantage removed by correction, with a pre-registered threshold `VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL = 0.5` and regression tests in `tests/test_validation.py`.
+- **Scorecard harness added (2026-04-28):** `src/validation.py::evaluate_venue_correction_scorecard` combines held-out log-loss, home-ice over-correction, and residual venue z-score gates; `scripts/export_venue_correction_validation.py` exports a Markdown artifact from a metrics JSON payload. Live DB execution remains blocked until the v5 backfill completes.
 
 Acceptance:
 - Held-out log-loss does not worsen after applying correction.
