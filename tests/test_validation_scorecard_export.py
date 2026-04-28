@@ -17,6 +17,38 @@ exporter = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(exporter)
 
 
+def test_build_nbconvert_command_sets_windows_selector_policy_before_nbconvert():
+    command = exporter._build_nbconvert_command(
+        Path("notebooks/model_validation_framework.ipynb"),
+        Path("artifacts"),
+        123,
+    )
+
+    assert command[:3] == [
+        exporter.sys.executable,
+        "-c",
+        exporter._NBCONVERT_ENTRYPOINT,
+    ]
+    assert "WindowsSelectorEventLoopPolicy" in command[2]
+    assert (
+        command[2].index("set_event_loop_policy")
+        < command[2].index("from nbconvert.nbconvertapp import main")
+    )
+    assert "-m" not in command[:4]
+    assert "jupyter" not in command[:4]
+    assert command[3:] == [
+        "--to",
+        "notebook",
+        "--execute",
+        "--ExecutePreprocessor.timeout=123",
+        str(Path("notebooks/model_validation_framework.ipynb")),
+        "--output",
+        exporter.EXECUTED_NOTEBOOK_NAME,
+        "--output-dir",
+        str(Path("artifacts")),
+    ]
+
+
 class _FakeProcess:
     def __init__(self, *, wait_timeout=False):
         self.wait_timeout = wait_timeout

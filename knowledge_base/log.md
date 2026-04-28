@@ -199,4 +199,4 @@
 **Source:** `scripts/export_validation_scorecard.py`, `scripts/export_venue_correction_validation.py`
 **Pages touched:**
 - None - operational script verbosity only; no domain wiki article claims changed.
-**Notes:** The validation scorecard exporter now prints stage timestamps, schema-coverage summaries, streamed notebook execution output, and periodic notebook-execution heartbeats; it also terminates or kills the notebook child process if the exporter is interrupted. The venue-correction exporter now prints payload, gate, and artifact-write progress.
+**Notes:** The validation scorecard exporter now prints stage timestamps, schema-coverage summaries, streamed notebook execution output, and periodic notebook-execution heartbeats; it also terminates or kills the notebook child process if the exporter is interrupted. On Windows, it launches `nbconvert` through a Python entrypoint that sets `WindowsSelectorEventLoopPolicy` before importing nbconvert, suppressing the harmless ZMQ Proactor-loop warning without hiding other warnings. The venue-correction exporter now prints payload, gate, and artifact-write progress.
