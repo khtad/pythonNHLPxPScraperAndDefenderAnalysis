@@ -18,11 +18,13 @@ from validation import (
     HOSMER_LEMESHOW_ALPHA,
     MIN_SHOTS_PER_CELL,
     MIN_TRAIN_SEASONS,
+    VENUE_CORRECTION_MAX_ABS_RESIDUAL_Z_SCORE,
     VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL,
     bootstrap_goal_rate_ci,
     calibration_slope_intercept,
     cohens_h,
     evaluate_venue_correction_holdout,
+    evaluate_venue_correction_scorecard,
     hosmer_lemeshow_test,
     run_temporal_cv,
 )
@@ -288,6 +290,10 @@ def test_venue_correction_guardrail_threshold_is_documented_value():
     assert VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL == 0.5
 
 
+def test_venue_correction_residual_z_threshold_is_documented_value():
+    assert VENUE_CORRECTION_MAX_ABS_RESIDUAL_Z_SCORE == 2.0
+
+
 def test_evaluate_venue_correction_holdout_passes_when_both_gates_pass():
     y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
     is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
@@ -330,4 +336,49 @@ def test_evaluate_venue_correction_holdout_raises_on_length_mismatch():
             np.array([0.6]),
             np.array([0.6, 0.4]),
             np.array([True, False]),
+        )
+
+
+def test_evaluate_venue_correction_scorecard_passes_all_gates():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.90, 0.70, 0.40, 0.20, 0.60, 0.40, 0.40, 0.20])
+    corrected = np.array([0.85, 0.75, 0.35, 0.25, 0.55, 0.35, 0.35, 0.25])
+    residual_z = {"Arena A": 1.1, "Arena B": -1.8}
+
+    result = evaluate_venue_correction_scorecard(
+        y_true, baseline, corrected, is_home, residual_z
+    )
+
+    assert result["log_loss_non_worse_pass"] is True
+    assert result["home_ice_guardrail_pass"] is True
+    assert result["residual_z_score_pass"] is True
+    assert result["overall_pass"] is True
+    assert result["worst_residual_venue"] == "Arena B"
+
+
+def test_evaluate_venue_correction_scorecard_fails_residual_z_gate():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.90, 0.70, 0.40, 0.20, 0.60, 0.40, 0.40, 0.20])
+    corrected = np.array([0.85, 0.75, 0.35, 0.25, 0.55, 0.35, 0.35, 0.25])
+    residual_z = {"Arena A": 2.4, "Arena B": -1.8}
+
+    result = evaluate_venue_correction_scorecard(
+        y_true, baseline, corrected, is_home, residual_z
+    )
+
+    assert result["residual_z_score_pass"] is False
+    assert result["overall_pass"] is False
+    assert result["worst_residual_venue"] == "Arena A"
+
+
+def test_evaluate_venue_correction_scorecard_rejects_empty_residuals():
+    with pytest.raises(ValueError, match="At least one residual"):
+        evaluate_venue_correction_scorecard(
+            np.array([1, 0]),
+            np.array([0.6, 0.4]),
+            np.array([0.6, 0.4]),
+            np.array([True, False]),
+            {},
         )
