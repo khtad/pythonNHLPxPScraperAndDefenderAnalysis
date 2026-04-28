@@ -192,3 +192,11 @@
 - Updated `wiki/concepts/venue-scorekeeper-bias.md` - documented the new scorecard harness that combines held-out log-loss, home-ice over-correction, and residual venue z-score gates before accepting venue correction for xG training.
 - Updated `index.md` - bumped Last updated date and summary line.
 **Notes:** DB-independent harness work only. Live Phase 2.5.4 metrics still wait on the v5 database update and a future metrics-generation run.
+
+### 2026-04-28 - UPDATE
+
+**Action:** Added progress output to validation artifact exporters
+**Source:** `scripts/export_validation_scorecard.py`, `scripts/export_venue_correction_validation.py`
+**Pages touched:**
+- None - operational script verbosity only; no domain wiki article claims changed.
+**Notes:** The validation scorecard exporter now prints stage timestamps, schema-coverage summaries, streamed notebook execution output, and periodic notebook-execution heartbeats; it also terminates or kills the notebook child process if the exporter is interrupted. The venue-correction exporter now prints payload, gate, and artifact-write progress.
