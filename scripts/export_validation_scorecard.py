@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -28,16 +29,61 @@ EXECUTED_NOTEBOOK_NAME = "model_validation_framework.executed.ipynb"
 SCORECARD_OUTPUT_NAME = "validation_scorecard_latest.md"
 SCORECARD_SENTINEL = "VALIDATION SCORECARD"
 DEFAULT_EXECUTION_TIMEOUT_SECONDS = 3600
+DEFAULT_PROGRESS_INTERVAL_SECONDS = 30.0
 
 
-def _run_command(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _progress(message: str, run_started_at: float | None = None) -> None:
+    timestamp = dt.datetime.now().strftime("%H:%M:%S")
+    elapsed = ""
+    if run_started_at is not None:
+        elapsed = f" elapsed={_format_duration(time.monotonic() - run_started_at)}"
+    print(f"[{timestamp}] {message}{elapsed}", flush=True)
+
+
+def _run_command_with_progress(
+    cmd: list[str],
+    *,
+    label: str,
+    progress_interval_seconds: float,
+    run_started_at: float,
+) -> None:
+    step_started_at = time.monotonic()
+    _progress(f"Starting {label}.", run_started_at)
+    process = subprocess.Popen(
         cmd,
-        check=True,
-        capture_output=True,
-        text=True,
         cwd=PROJECT_ROOT,
     )
+    next_progress_at = step_started_at + progress_interval_seconds
+    while True:
+        return_code = process.poll()
+        if return_code is not None:
+            break
+
+        if (
+            progress_interval_seconds > 0
+            and time.monotonic() >= next_progress_at
+        ):
+            step_elapsed = _format_duration(time.monotonic() - step_started_at)
+            _progress(f"{label} still running after {step_elapsed}.", run_started_at)
+            next_progress_at = time.monotonic() + progress_interval_seconds
+        time.sleep(1.0)
+
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, cmd)
+
+    step_elapsed = _format_duration(time.monotonic() - step_started_at)
+    _progress(f"Finished {label} in {step_elapsed}.", run_started_at)
 
 
 def _prepare_database(database_path: Path) -> tuple[list[tuple[str | None, int]], int]:
@@ -104,7 +150,28 @@ def main() -> None:
         default=DEFAULT_EXECUTION_TIMEOUT_SECONDS,
         help="Notebook execution timeout per cell.",
     )
+    parser.add_argument(
+        "--progress-interval-seconds",
+        type=float,
+        default=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        help=(
+            "Seconds between progress heartbeats while the notebook is "
+            "executing. Use 0 to disable periodic heartbeats."
+        ),
+    )
     args = parser.parse_args()
+    if args.progress_interval_seconds < 0:
+        raise ValueError("--progress-interval-seconds must be non-negative.")
+
+    run_started_at = time.monotonic()
+    _progress("Starting validation scorecard export.", run_started_at)
+    _progress(f"Database path: {args.db_path}", run_started_at)
+    _progress(f"Notebook path: {args.notebook_path}", run_started_at)
+    _progress(f"Output directory: {args.output_dir}", run_started_at)
+    _progress(
+        f"Notebook per-cell timeout: {_format_duration(args.timeout_seconds)}.",
+        run_started_at,
+    )
 
     if not args.db_path.exists():
         raise FileNotFoundError(
@@ -118,10 +185,20 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     executed_notebook_path = args.output_dir / EXECUTED_NOTEBOOK_NAME
     scorecard_output_path = args.output_dir / SCORECARD_OUTPUT_NAME
+    _progress("Checking database schema coverage.", run_started_at)
     version_counts, stale_training_rows = _prepare_database(args.db_path)
     current_version_rows = sum(
         count for version, count in version_counts
         if version == _XG_EVENT_SCHEMA_VERSION
+    )
+    version_summary = ", ".join(
+        f"{version or 'NULL'}={count:,}" for version, count in version_counts
+    )
+    _progress(f"Shot-event schema rows: {version_summary}.", run_started_at)
+    _progress(
+        f"Current-version rows: {current_version_rows:,}; "
+        f"stale training-eligible rows: {stale_training_rows:,}.",
+        run_started_at,
     )
     if current_version_rows == 0:
         raise RuntimeError(
@@ -137,7 +214,12 @@ def main() -> None:
             "backfill before exporting it."
         )
 
-    _run_command(
+    _progress(
+        "Executing notebook with nbconvert. This is usually the longest step; "
+        "Jupyter output and periodic heartbeats will stream below.",
+        run_started_at,
+    )
+    _run_command_with_progress(
         [
             sys.executable,
             "-m",
@@ -152,11 +234,16 @@ def main() -> None:
             EXECUTED_NOTEBOOK_NAME,
             "--output-dir",
             str(args.output_dir),
-        ]
+        ],
+        label="notebook execution",
+        progress_interval_seconds=args.progress_interval_seconds,
+        run_started_at=run_started_at,
     )
 
+    _progress("Extracting scorecard block from executed notebook.", run_started_at)
     scorecard_text = _extract_scorecard_text(executed_notebook_path)
     generated_at = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+    _progress(f"Writing scorecard artifact: {scorecard_output_path}", run_started_at)
     scorecard_output_path.write_text(
         "# Validation Scorecard (Latest Run)\n\n"
         f"Generated: {generated_at}\n\n"
@@ -172,8 +259,9 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    print(f"Executed notebook written to: {executed_notebook_path}")
-    print(f"Scorecard artifact written to: {scorecard_output_path}")
+    _progress(f"Executed notebook written to: {executed_notebook_path}", run_started_at)
+    _progress(f"Scorecard artifact written to: {scorecard_output_path}", run_started_at)
+    _progress("Validation scorecard export complete.", run_started_at)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import argparse
 import datetime as dt
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from validation import evaluate_venue_correction_scorecard
 DEFAULT_OUTPUT_PATH = (
     PROJECT_ROOT / "artifacts" / "venue_correction_validation_latest.md"
 )
+DEFAULT_PROGRESS_INTERVAL_SECONDS = 30.0
 
 REQUIRED_PAYLOAD_FIELDS = (
     "y_true",
@@ -33,6 +35,32 @@ REQUIRED_PAYLOAD_FIELDS = (
     "is_home_attempt",
     "residual_venue_z_scores",
 )
+
+
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _progress(message: str, run_started_at: float | None = None) -> None:
+    timestamp = dt.datetime.now().strftime("%H:%M:%S")
+    elapsed = ""
+    if run_started_at is not None:
+        elapsed = f" elapsed={_format_duration(time.monotonic() - run_started_at)}"
+    print(f"[{timestamp}] {message}{elapsed}", flush=True)
+
+
+def _len_if_available(value: Any) -> int | None:
+    try:
+        return len(value)
+    except TypeError:
+        return None
 
 
 def load_payload(path: Path) -> dict[str, Any]:
@@ -134,18 +162,69 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_OUTPUT_PATH,
         help="Markdown artifact path to write.",
     )
+    parser.add_argument(
+        "--progress-interval-seconds",
+        type=float,
+        default=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        help=(
+            "Reserved for consistency with other artifact exporters. "
+            "Use 0 to suppress the startup heartbeat note."
+        ),
+    )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.progress_interval_seconds < 0:
+        raise ValueError("--progress-interval-seconds must be non-negative.")
+
+    run_started_at = time.monotonic()
+    _progress("Starting venue-correction scorecard export.", run_started_at)
+    if args.progress_interval_seconds > 0:
+        _progress(
+            "This exporter is usually quick; long-running DB metric generation "
+            "should happen before this script and provide the metrics JSON.",
+            run_started_at,
+        )
+    _progress(f"Metrics JSON path: {args.metrics_json}", run_started_at)
+    _progress(f"Output path: {args.output_path}", run_started_at)
+
+    _progress("Loading metrics payload.", run_started_at)
     payload = load_payload(args.metrics_json)
+    y_true_rows = _len_if_available(payload.get("y_true", []))
+    residual_count = _len_if_available(payload.get("residual_venue_z_scores", []))
+    _progress(
+        "Payload summary: "
+        f"holdout rows={y_true_rows if y_true_rows is not None else 'unknown'}, "
+        f"residual venues={residual_count if residual_count is not None else 'unknown'}.",
+        run_started_at,
+    )
+
+    _progress("Evaluating venue-correction acceptance gates.", run_started_at)
     metrics = evaluate_payload(payload)
+    _progress(
+        "Gate results: "
+        f"log_loss={_format_gate(metrics['log_loss_non_worse_pass'])}, "
+        f"home_ice={_format_gate(metrics['home_ice_guardrail_pass'])}, "
+        f"residual_z={_format_gate(metrics['residual_z_score_pass'])}, "
+        f"overall={_format_gate(metrics['overall_pass'])}.",
+        run_started_at,
+    )
+    _progress(
+        f"Worst residual venue: {metrics['worst_residual_venue']} "
+        f"(max |z|={metrics['max_abs_residual_z_score']:.3f}).",
+        run_started_at,
+    )
+
+    _progress("Formatting Markdown scorecard.", run_started_at)
     scorecard = format_scorecard(metrics)
 
+    _progress("Writing venue-correction scorecard artifact.", run_started_at)
     args.output_path.parent.mkdir(parents=True, exist_ok=True)
     args.output_path.write_text(scorecard, encoding="utf-8")
-    print(f"Venue correction scorecard written to: {args.output_path}")
+    _progress(f"Venue correction scorecard written to: {args.output_path}", run_started_at)
+    _progress("Venue-correction scorecard export complete.", run_started_at)
 
 
 if __name__ == "__main__":
