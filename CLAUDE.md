@@ -165,6 +165,7 @@ player-schema bootstrap
    - **Rules to avoid repeat failures of this type:**
      - On Codex desktop Windows threads, do not assume `python` is available on PATH. Verify the interpreter first or use the bundled runtime path from `load_workspace_dependencies`.
      - If a quick inspection/query script needs Python in this environment, prefer the bundled interpreter returned by `load_workspace_dependencies` over `py -3`, especially for stdin-piped scripts.
+     - PowerShell does not support bash heredocs such as `python - <<'PY'`. For stdin-driven scripts in PowerShell, use a here-string piped into the bundled interpreter, for example `@' ... '@ | & "<python.exe>" -`.
 
 8. **Failure:** The repository-local Windows venv launcher (`.venv\Scripts\python.exe`) failed with `No Python at '"/usr/bin\python.exe'`.
    - **Cause:** The checked-in `.venv` was created from a WSL/Linux interpreter, so `pyvenv.cfg` points at `/usr/bin/python3.12` and the Windows launcher cannot resolve that home interpreter.
@@ -179,6 +180,22 @@ player-schema bootstrap
    - **Rules to avoid repeat failures of this type:**
      - On Windows Codex desktop threads, do not assume Git commands will work even for read-only status checks. If you see a dubious-ownership error, stop relying on Git output until the repo is marked safe.
      - Treat `git config --global --add safe.directory ...` as an environment mutation that needs user approval; do not apply it silently.
+
+10. **Failure:** The Windows bundled Python could run focused tests but the broader suite failed collection with `ModuleNotFoundError` for `requests`, and validation tests skipped because `scipy` was missing.
+   - **Cause:** The runtime had `pytest`, `numpy`, and notebook plotting packages installed, but not all packages imported by source modules and validation notebooks. `requirements.txt` listed `requests` but did not list `scipy` or `scikit-learn`, even though `src/validation.py` imports them.
+   - **Fix:** Installed the missing runtime packages with `python -m pip install requests scipy scikit-learn` using the bundled interpreter, then added `scipy` and `scikit-learn` to `requirements.txt`.
+   - **Rules to avoid repeat failures of this type:**
+     - After adding or modifying notebooks or source files that import statistical packages, update `requirements.txt` in the same change.
+     - Before reporting the suite as blocked by missing dependencies, run `python -m pip show <package>` against the exact interpreter used for pytest so the missing package set is explicit.
+     - Prefer running pytest through the interpreter (`python -m pytest`) rather than relying on script launchers or PATH entries for the Codex bundled runtime.
+
+11. **Failure:** Full pytest runs on the Windows Codex desktop thread failed in `tmp_path` fixture setup with `PermissionError: [WinError 5] Access is denied` for pytest temp directories.
+   - **Cause:** Pytest's default temp root under `AppData\Local\Temp` was inaccessible in the sandbox, and workspace-local `--basetemp` directories created by sandboxed runs also became unreadable to later commands.
+   - **Fix:** Reran the suite outside the sandbox with explicit ignores for stale inaccessible temp directories and a fresh base temp: `python -m pytest -q --ignore=tests/test_rink_viz.py --ignore=tests/test_stats_helpers.py --ignore=pytest_tmp --ignore=.pytest-tmp --basetemp=pytest_tmp_escalated`, which completed with `342 passed`.
+   - **Rules to avoid repeat failures of this type:**
+     - If pytest fails before assertions with `PermissionError` under `pytest-of-*` or a workspace `pytest_tmp*` directory, treat it as a test-harness temp-dir issue, not a code failure.
+     - Do not leave stale pytest temp directories in the collection tree if they are readable; remove them before rerunning. If they are unreadable, add explicit `--ignore=<dir>` flags so pytest does not try to collect them.
+     - Prefer a fresh `--basetemp` value for each rerun after a temp-dir permission failure, and report any generated unreadable temp directories that could not be cleaned up.
 
 ## Derived-Data Versioning & Backfill
 
@@ -245,7 +262,8 @@ The validation framework notebook (`notebooks/model_validation_framework.ipynb`)
 ## Development Guardrails
 
 - **Check conceptual PR scope before starting new work**: At the start of any new interaction, evaluate whether the requested work belongs in the same conceptual basket as the changes since the previous pull request. If it does not, stop before making code changes and ask the user how they want to handle the new chunk of work that would need to move through the PR process separately.
-- **Knowledge base update is a PR precondition**: Before opening or updating any pull request, complete the `knowledge_base/` update workflow for the current change set. At minimum: update any affected wiki pages, bump `knowledge_base/index.md`'s last-updated line if content changed, and append a dated entry to `knowledge_base/log.md` summarizing the ingest/update. If no knowledge-base content changes are required, explicitly record that determination in the PR notes.
+- **Knowledge base update is a PR precondition**: Before opening or updating any pull request, complete the `knowledge_base/` update workflow for the current change set. At minimum: update any affected wiki pages, bump `knowledge_base/index.md`'s last-updated line if content changed, and append a dated entry to `knowledge_base/log.md` summarizing the ingest/update. If no knowledge-base content changes are required, explicitly record that determination in the PR notes. Treat this as a tracked work item, not a final-memory check: add a plan/checklist item for "knowledge-base update or explicit no-change note" whenever touching `src/`, `notebooks/`, `docs/`, `artifacts/`, or project governance files.
+- **Run the KB preflight before presenting a branch as complete**: Run `python scripts/check_knowledge_base_update.py --base-ref origin/main` before reporting a PR-ready branch. If the script fails, either update `knowledge_base/` and `knowledge_base/log.md`, or rerun with `--no-kb-needed "<reason>"` and carry that exact reason into PR notes. When changing the guardrail script itself, also run `python -m pytest tests/test_knowledge_base_governance.py -q`.
 - **Encode remediations as rules**: Every time an error is encountered, diagnosed, and remediated with a new or updated pattern — regardless of whether it is a test failure, a tool-invocation error, a command-line flag mistake, a data quality issue, a schema drift, or a harness/environment misconfiguration — add a rule to `CLAUDE.md` before moving on. Use the "Test Failures Encountered, Fixes, and Prevention Rules" section (numbered-entry format with **Failure**, **Cause**, **Fix**, and **Rules to avoid repeat failures of this type** subsections) for test-suite and runtime failures; use "Development Guardrails" for coding conventions or process patterns that emerge from the fix. Each entry must capture the failure symptom, the root cause, the remediation (including the exact command, flag, or code change), and at least one prevention rule phrased so a future agent can recognize the pattern without re-deriving it. The goal is that the same class of failure never requires rediscovery — if you had to learn it, write it down.
 - Keep SQL identifiers validated and quoted when dynamic.
 - **Validate all external input used in SQL**: Never interpolate raw strings into SQL — not even for column names. Values must use parameterized queries (`?` placeholders). Identifiers (table/column names) that originate from external input (API responses, user arguments, dict keys) must pass through `_quote_identifier`, which rejects anything that isn't `^\w+$`. If a function accepts a dict and uses its keys as column names, those keys must be validated or drawn from a known-safe allowlist before being spliced into the query string.

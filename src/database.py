@@ -75,6 +75,11 @@ VALID_SHOT_EVENT_TYPES = (
     "blocked-shot",
 )
 BLOCKED_SHOT_EVENT_TYPE = "blocked-shot"
+_LEGACY_V4_EVENT_SCHEMA_VERSION = "v4"
+_NON_BLOCKED_SHOT_EVENT_TYPES = tuple(
+    event_type for event_type in VALID_SHOT_EVENT_TYPES
+    if event_type != BLOCKED_SHOT_EVENT_TYPE
+)
 ANALYSIS_SHOT_WHERE = (
     f"(se.shot_event_type IS NULL OR se.shot_event_type != '{BLOCKED_SHOT_EVENT_TYPE}')"
 )
@@ -159,13 +164,17 @@ def load_training_shot_events(conn, min_season=_MIN_TRAINING_SEASON):
 
     This enforces the Phase 2.5.5 pre-2009 triage decision: pre-2009 seasons
     are excluded from model training inputs. The query also enforces non-null
-    geometric features required for baseline xG fitting.
+    geometric features required for baseline xG fitting and excludes blocked
+    shots from model-training inputs.
     """
     cursor = conn.cursor()
     cursor.execute(
         """SELECT se.game_id, se.event_idx, g.season,
+                  g.venue_name, se.period,
                   se.shot_type, se.distance_to_goal, se.angle_to_goal,
-                  se.manpower_state, se.score_state, se.is_goal
+                  se.manpower_state, se.score_state,
+                  se.seconds_since_faceoff, se.faceoff_zone_code,
+                  se.is_goal
            FROM shot_events se
            JOIN games g ON se.game_id = g.game_id
            WHERE se.event_schema_version = ?
@@ -174,8 +183,9 @@ def load_training_shot_events(conn, min_season=_MIN_TRAINING_SEASON):
              AND se.distance_to_goal IS NOT NULL
              AND se.angle_to_goal IS NOT NULL
              AND se.shot_type IS NOT NULL
+             AND (se.shot_event_type IS NULL OR se.shot_event_type != ?)
            ORDER BY g.season, se.game_id, se.event_idx""",
-        (_XG_EVENT_SCHEMA_VERSION, str(min_season)),
+        (_XG_EVENT_SCHEMA_VERSION, str(min_season), BLOCKED_SHOT_EVENT_TYPE),
     )
     columns = [desc[0] for desc in cursor.description]
     return [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -695,13 +705,90 @@ def _migrate_shot_events_v3_to_v4(conn):
 
 
 def _migrate_shot_events_v4_to_v5(conn):
-    """Add shot_event_type so blocked shots can be filtered directly."""
+    """Add shot_event_type so blocked shots can be filtered directly.
+
+    Existing v4 databases may already contain current shot geometry but lack
+    the explicit event type. Reconstruct that event type from the raw
+    per-game tables when the raw shot-event sequence matches the legacy
+    shot_events sequence. Games that cannot be matched are left at v4 so the
+    version-aware backfill can repair them from the API.
+    """
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(shot_events)")
     existing_cols = {row[1] for row in cursor.fetchall()}
     if "shot_event_type" not in existing_cols:
         cursor.execute("ALTER TABLE shot_events ADD COLUMN shot_event_type TEXT")
+
+    cursor.execute(
+        """SELECT DISTINCT game_id
+           FROM shot_events
+           WHERE event_schema_version = ?
+           ORDER BY game_id""",
+        (_LEGACY_V4_EVENT_SCHEMA_VERSION,),
+    )
+    legacy_game_ids = [row[0] for row in cursor.fetchall()]
+
+    for game_id in legacy_game_ids:
+        raw_table_name = _game_table_name(game_id)
+        if not _raw_game_table_exists(cursor, raw_table_name):
+            continue
+
+        cursor.execute(
+            """SELECT shot_event_id
+               FROM shot_events
+               WHERE game_id = ?
+                 AND event_schema_version = ?
+               ORDER BY period, time_remaining_seconds DESC, event_idx""",
+            (game_id, _LEGACY_V4_EVENT_SCHEMA_VERSION),
+        )
+        shot_event_ids = [row[0] for row in cursor.fetchall()]
+        if not shot_event_ids:
+            continue
+
+        raw_event_types = _load_raw_shot_event_types(
+            cursor, raw_table_name, _NON_BLOCKED_SHOT_EVENT_TYPES
+        )
+        if len(raw_event_types) != len(shot_event_ids):
+            raw_event_types = _load_raw_shot_event_types(
+                cursor, raw_table_name, VALID_SHOT_EVENT_TYPES
+            )
+        if len(raw_event_types) != len(shot_event_ids):
+            continue
+
+        cursor.executemany(
+            """UPDATE shot_events
+               SET shot_event_type = ?,
+                   event_schema_version = ?
+               WHERE shot_event_id = ?""",
+            [
+                (event_type, _XG_EVENT_SCHEMA_VERSION, shot_event_id)
+                for event_type, shot_event_id in zip(raw_event_types, shot_event_ids)
+            ],
+        )
     conn.commit()
+
+
+def _raw_game_table_exists(cursor, table_name):
+    """Return True when a raw game table is present."""
+    cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = ? AND name = ? LIMIT 1",
+        (_SQLITE_TABLE_TYPE, table_name),
+    )
+    return cursor.fetchone() is not None
+
+
+def _load_raw_shot_event_types(cursor, raw_table_name, event_types):
+    """Return raw event names in stored play order for one game table."""
+    placeholders = ", ".join(["?"] * len(event_types))
+    quoted_table = _quote_identifier(raw_table_name)
+    cursor.execute(
+        f"""SELECT event
+            FROM {quoted_table}
+            WHERE event IN ({placeholders})
+            ORDER BY id""",
+        tuple(event_types),
+    )
+    return [row[0] for row in cursor.fetchall()]
 
 
 _SHOT_EVENTS_INSERT_COLUMNS = (

@@ -3,6 +3,10 @@ pytest
 
 # Optional: analysis notebooks
 jupyter
+nbconvert
+ipykernel
 matplotlib
 seaborn
 numpy
+scipy
+scikit-learn

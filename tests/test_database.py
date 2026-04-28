@@ -581,6 +581,18 @@ def test_load_training_shot_events_excludes_null_distance_rows(conn):
     assert [r["event_idx"] for r in rows] == [0]
 
 
+def test_load_training_shot_events_excludes_blocked_shots(conn):
+    _seed_game_env(conn)
+    _seed_game(conn, 813, "20092010", n_shots=1)
+    insert_shot_events(conn, [
+        _shot_dict(813, 99, shot_event_type="blocked-shot"),
+    ])
+
+    rows = load_training_shot_events(conn)
+
+    assert [r["event_idx"] for r in rows] == [0]
+
+
 def test_create_shifts_table_creates_expected_columns(conn):
     create_shifts_table(conn)
     cur = conn.cursor()

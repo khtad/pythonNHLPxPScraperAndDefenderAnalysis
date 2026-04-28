@@ -173,3 +173,13 @@
 - Created `wiki/meta/knowledge-base-maintenance-workflow.md` — documented required pre-PR KB maintenance steps (wiki update, index refresh, and log entry) plus auditability requirement for no-change cases.
 - Updated `index.md` — added meta-page link and refreshed Last updated summary.
 **Notes:** Governance/documentation-only update. No empirical data claims changed and no `data-version` tags required.
+
+### 2026-04-28 — UPDATE
+
+**Action:** Added executable KB preflight guardrail and refreshed shot-event schema status for Phase 2.5.3 validation-scorecard readiness
+**Source:** `scripts/check_knowledge_base_update.py`, `tests/test_knowledge_base_governance.py`, `CLAUDE.md`, `src/database.py` (`_migrate_shot_events_v4_to_v5`, `_XG_EVENT_SCHEMA_VERSION`), `artifacts/validation_scorecard_latest.md`, `docs/xg_model_roadmap.md`
+**Pages touched:**
+- Updated `wiki/meta/knowledge-base-maintenance-workflow.md` — added the `scripts/check_knowledge_base_update.py` preflight, explicit agent planning requirement, and source reference for the regression tests.
+- Updated `wiki/data/nhl-api-shot-events.md` — refreshed the schema description to v5, added `shot_event_type` and on-ice slot documentation, and recorded the partial v5 coverage blocker for validation-scorecard export.
+- Updated `index.md` — bumped Last updated date and summary line.
+**Notes:** Prevents repeat omissions by making KB maintenance a visible work item and an executable preflight. The validation-scorecard branch safely promoted 1,574,298 local `shot_events` rows from v4 to v5, but 546,702 remain stale; 507,543 of those are otherwise training-eligible post-2009 complete-geometry rows, so live Phase 2.5.3 scorecard export remains blocked until current-schema coverage is complete.

@@ -21,6 +21,7 @@ from database import (
     game_has_current_shot_events,
     delete_game_shot_events,
     _migrate_shot_events_v1_to_v2,
+    _migrate_shot_events_v4_to_v5,
 )
 
 
@@ -380,6 +381,105 @@ def test_migrate_shot_events_v1_to_v2_is_idempotent(conn):
     create_shot_events_table(conn)
     _migrate_shot_events_v1_to_v2(conn)
     _migrate_shot_events_v1_to_v2(conn)
+
+
+def test_migrate_shot_events_v4_to_v5_reconstructs_event_types(conn):
+    """v4 rows can be promoted when raw non-blocked events match in order."""
+    create_shot_events_table(conn)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE game_2023020001 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period INTEGER,
+            time TEXT,
+            event TEXT,
+            description TEXT
+        )
+    """)
+    cur.executemany(
+        """INSERT INTO game_2023020001 (period, time, event, description)
+           VALUES (?, ?, ?, ?)""",
+        [
+            (1, "00:10", "shot-on-goal", "shot-on-goal"),
+            (1, "00:15", "blocked-shot", "blocked-shot"),
+            (1, "00:30", "missed-shot", "missed-shot"),
+            (1, "00:35", "goal", "goal"),
+        ],
+    )
+    for event_idx, time_remaining in [(10, 1190), (30, 1170), (35, 1165)]:
+        _insert_shot(
+            cur,
+            {
+                "game_id": 2023020001,
+                "event_idx": event_idx,
+                "time_remaining_seconds": time_remaining,
+                "shot_event_type": None,
+            },
+            version="v4",
+        )
+    conn.commit()
+
+    _migrate_shot_events_v4_to_v5(conn)
+
+    cur.execute(
+        """SELECT shot_event_type, event_schema_version
+           FROM shot_events
+           ORDER BY event_idx"""
+    )
+    assert cur.fetchall() == [
+        ("shot-on-goal", _XG_EVENT_SCHEMA_VERSION),
+        ("missed-shot", _XG_EVENT_SCHEMA_VERSION),
+        ("goal", _XG_EVENT_SCHEMA_VERSION),
+    ]
+
+
+def test_migrate_shot_events_v4_to_v5_leaves_mismatched_games_stale(conn):
+    """Mismatched raw and derived sequences stay stale for API backfill."""
+    create_shot_events_table(conn)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE game_2023020002 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period INTEGER,
+            time TEXT,
+            event TEXT,
+            description TEXT
+        )
+    """)
+    cur.execute(
+        """INSERT INTO game_2023020002 (period, time, event, description)
+           VALUES (1, '00:10', 'shot-on-goal', 'shot-on-goal')"""
+    )
+    _insert_shot(
+        cur,
+        {
+            "game_id": 2023020002,
+            "event_idx": 10,
+            "time_remaining_seconds": 1190,
+            "shot_event_type": None,
+        },
+        version="v4",
+    )
+    _insert_shot(
+        cur,
+        {
+            "game_id": 2023020002,
+            "event_idx": 20,
+            "time_remaining_seconds": 1180,
+            "shot_event_type": None,
+        },
+        version="v4",
+    )
+    conn.commit()
+
+    _migrate_shot_events_v4_to_v5(conn)
+
+    cur.execute(
+        """SELECT shot_event_type, event_schema_version
+           FROM shot_events
+           ORDER BY event_idx"""
+    )
+    assert cur.fetchall() == [(None, "v4"), (None, "v4")]
 
 
 # ── Phase 1: insert_shot_events ───────────────────────────────────────
