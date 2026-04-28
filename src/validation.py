@@ -300,10 +300,11 @@ def evaluate_venue_correction_scorecard(
         max_home_ice_advantage_removal=max_home_ice_advantage_removal,
     )
     residual_items = _coerce_residual_z_score_items(residual_venue_z_scores)
-    worst_venue, max_abs_residual_z_score_observed = max(
+    worst_venue, worst_residual_z_score = max(
         residual_items,
         key=lambda item: abs(item[1]),
     )
+    max_abs_residual_z_score_observed = abs(worst_residual_z_score)
     residual_z_score_pass = (
         max_abs_residual_z_score_observed < max_abs_residual_z_score
     )

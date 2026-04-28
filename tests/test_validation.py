@@ -355,6 +355,7 @@ def test_evaluate_venue_correction_scorecard_passes_all_gates():
     assert result["residual_z_score_pass"] is True
     assert result["overall_pass"] is True
     assert result["worst_residual_venue"] == "Arena B"
+    assert result["max_abs_residual_z_score"] == pytest.approx(1.8)
 
 
 def test_evaluate_venue_correction_scorecard_fails_residual_z_gate():
@@ -371,6 +372,24 @@ def test_evaluate_venue_correction_scorecard_fails_residual_z_gate():
     assert result["residual_z_score_pass"] is False
     assert result["overall_pass"] is False
     assert result["worst_residual_venue"] == "Arena A"
+    assert result["max_abs_residual_z_score"] == pytest.approx(2.4)
+
+
+def test_evaluate_venue_correction_scorecard_fails_negative_residual_z_gate():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.90, 0.70, 0.40, 0.20, 0.60, 0.40, 0.40, 0.20])
+    corrected = np.array([0.85, 0.75, 0.35, 0.25, 0.55, 0.35, 0.35, 0.25])
+    residual_z = {"Arena A": 1.8, "Arena B": -2.4}
+
+    result = evaluate_venue_correction_scorecard(
+        y_true, baseline, corrected, is_home, residual_z
+    )
+
+    assert result["residual_z_score_pass"] is False
+    assert result["overall_pass"] is False
+    assert result["worst_residual_venue"] == "Arena B"
+    assert result["max_abs_residual_z_score"] == pytest.approx(2.4)
 
 
 def test_evaluate_venue_correction_scorecard_rejects_empty_residuals():

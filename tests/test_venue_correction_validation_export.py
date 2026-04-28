@@ -40,6 +40,7 @@ def test_evaluate_payload_passes_for_valid_metrics():
     assert metrics["correction_method"] == "distance_mean_shrinkage_v1"
     assert metrics["training_snapshot"] == "synthetic-fixture"
     assert metrics["worst_residual_venue"] == "Arena B"
+    assert metrics["max_abs_residual_z_score"] == pytest.approx(1.8)
 
 
 def test_format_scorecard_includes_gate_summary():
@@ -50,6 +51,7 @@ def test_format_scorecard_includes_gate_summary():
     assert "Held-out log loss non-worse" in text
     assert "Home-ice over-correction guardrail" in text
     assert "Residual venue z-scores" in text
+    assert "max |z| = 1.800" in text
     assert "Overall pass: PASS" in text
     assert "Arena B" in text
 
