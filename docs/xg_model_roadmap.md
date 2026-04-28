@@ -235,7 +235,7 @@ Acceptance:
 - Execute `notebooks/model_validation_framework.ipynb` against the real database. This is the first end-to-end validation run; the notebook has never been exercised on live data.
 - Publish a committed scorecard artifact summarizing: base rate by season/manpower/era with CIs, feature ablation results, temporal CV metrics, calibration diagnostics, leakage-audit conclusions.
 - **Execution harness added (2026-04-24):** `scripts/export_validation_scorecard.py` now executes the notebook and extracts the `VALIDATION SCORECARD` block into `artifacts/validation_scorecard_latest.md`.
-- **Current blocker (2026-04-24):** this repository snapshot does not include `data/nhl_data.db`, so this environment cannot produce live metrics yet.
+- **Current blocker (2026-04-28):** this workspace now has `data/nhl_data.db`, but it is not fully current for the v5 training contract. The conservative offline v4->v5 migration reconstructed `shot_event_type` for 1,574,298 rows from raw game tables, leaving 546,702 rows at v4, including 507,543 otherwise training-eligible post-2009 complete-geometry rows. `scripts/export_validation_scorecard.py` now refuses to publish a partial scorecard until current-schema backfill repairs the remaining stale games or a validated offline matcher covers them.
 
 Acceptance:
 - All pass/fail cells return concrete numbers (no NotImplemented / skipped cells).

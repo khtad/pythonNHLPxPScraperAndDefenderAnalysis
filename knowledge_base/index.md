@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-04-24 (Added knowledge-base maintenance workflow and PR-precondition governance note)
+> Last updated: 2026-04-28 (Added KB preflight guardrail and refreshed shot-event schema status for v5 validation-scorecard readiness)
 
 ## Concepts
 
