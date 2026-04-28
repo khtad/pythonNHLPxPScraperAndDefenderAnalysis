@@ -16,6 +16,12 @@ Estimate and correct rink/venue scorer effects that distort event recording and 
   scorecard once a metrics JSON has been generated from a current database.
   The scorecard gates are held-out log-loss non-worsening, home-ice
   over-correction, and max residual venue z-score.
+- `scripts/export_venue_correction_validation_from_db.py` generates that
+  metrics payload directly from SQLite with forward-chaining temporal CV and
+  prior-season-only venue distance corrections. The first live v5 run passes
+  held-out log-loss and home-ice guardrails but fails the residual
+  corrected-distance z-score gate (`max |z| = 4.038`), so the current
+  correction remains exploratory rather than a production xG training feature.
 
 ## Extension points
 - Official-specific bias estimation where metadata supports.

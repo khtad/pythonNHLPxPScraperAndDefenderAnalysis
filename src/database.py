@@ -34,8 +34,9 @@ VALID_SHOT_TYPES = (
     "backhand",
     "tip-in",
     "wrap-around",
-    "deflection",
+    "deflected",
     "bat",
+    "between-legs",
     "cradle",
     "poke",
 )

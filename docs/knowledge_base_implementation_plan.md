@@ -48,7 +48,7 @@ Source material: `src/database.py` enums, `src/xg_features.py` constants,
 
 | Article | File | Summary |
 |---------|------|---------|
-| Shot Type Taxonomy | `wiki/data/shot-type-taxonomy.md` | The 10 valid shot types, definitions, frequency distribution, and xG relevance |
+| Shot Type Taxonomy | `wiki/data/shot-type-taxonomy.md` | The 11 valid shot types, definitions, frequency distribution, and xG relevance |
 | Manpower States | `wiki/data/manpower-states.md` | The 15 valid manpower codes, NHL situation code parsing, how they map to game situations |
 | Score States | `wiki/data/score-states.md` | The 7 score-state buckets, how they're derived from running score, behavioral effects |
 | NHL API Endpoints | `wiki/data/nhl-api-endpoints.md` | Schedule and play-by-play endpoints, rate limits, response structure, field availability by era |

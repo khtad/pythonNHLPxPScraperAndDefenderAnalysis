@@ -55,6 +55,12 @@ def test_valid_shot_types_is_nonempty_tuple_of_strings():
     assert all(isinstance(s, str) for s in VALID_SHOT_TYPES)
 
 
+def test_valid_shot_types_include_current_nhl_api_values():
+    assert "deflected" in VALID_SHOT_TYPES
+    assert "between-legs" in VALID_SHOT_TYPES
+    assert "deflection" not in VALID_SHOT_TYPES
+
+
 def test_valid_manpower_states_contains_common_states():
     required = {"5v5", "5v4", "4v5", "5v3", "3v5", "4v4"}
     assert required.issubset(set(VALID_MANPOWER_STATES))
@@ -217,6 +223,20 @@ def test_validate_shot_events_quality_detects_invalid_shot_type(conn):
 
     report = validate_shot_events_quality(conn)
     assert report["invalid_shot_type_rows"] == 1
+
+
+def test_validate_shot_events_quality_accepts_current_nhl_api_shot_types(conn):
+    create_shot_events_table(conn)
+    cur = conn.cursor()
+    _insert_shot(cur, {"event_idx": 1, "shot_type": "deflected"})
+    _insert_shot(
+        cur,
+        {"event_idx": 2, "game_id": 2023020002, "shot_type": "between-legs"},
+    )
+    conn.commit()
+
+    report = validate_shot_events_quality(conn)
+    assert report["invalid_shot_type_rows"] == 0
 
 
 def test_validate_shot_events_quality_detects_invalid_manpower_state(conn):

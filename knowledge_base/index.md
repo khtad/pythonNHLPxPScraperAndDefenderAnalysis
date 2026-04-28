@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-04-28 (Added KB preflight guardrail, refreshed shot-event schema status, and added Phase 2.5.4 venue-correction validation scorecard harness)
+> Last updated: 2026-04-28 (Recorded live validation and venue-correction scorecard runs)
 
 ## Concepts
 
@@ -25,7 +25,7 @@
 
 - [NHL API Shot Events](wiki/data/nhl-api-shot-events.md) — Canonical schema for individual shot events with normalized coordinates, game-state context, and faceoff recency.
 - [Coordinate System and Normalization](wiki/data/coordinate-system-and-normalization.md) — NHL rink coordinate conventions, normalization toward +x, and known data gaps by era.
-- [Shot Type Taxonomy](wiki/data/shot-type-taxonomy.md) — The 10 recognized shot types, their frequency distribution, and relevance to xG modeling.
+- [Shot Type Taxonomy](wiki/data/shot-type-taxonomy.md) — The 11 recognized shot types, their frequency distribution, and relevance to xG modeling.
 - [Manpower States](wiki/data/manpower-states.md) — The 15 valid skater-count situations parsed from NHL API situation codes.
 - [Score States](wiki/data/score-states.md) — The 7 score-differential buckets and their behavioral effects on shot volume and quality.
 - [NHL API Endpoints](wiki/data/nhl-api-endpoints.md) — Schedule, play-by-play, and player-landing endpoints: response structure, rate limiting, and field availability by era.

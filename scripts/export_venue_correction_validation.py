@@ -1,9 +1,10 @@
 """Export a Phase 2.5.4 venue-correction validation scorecard.
 
-This harness is intentionally metrics-input driven so it can be built and
-tested before the live database finishes backfilling. A later DB-specific
-runner can produce the JSON payload; this script owns the acceptance-gate
-evaluation and artifact formatting.
+This harness is intentionally metrics-input driven so fixture-level scorecard
+behavior stays testable without a live database. The DB-specific runner in
+``export_venue_correction_validation_from_db.py`` produces live metrics from
+SQLite; this script owns the shared acceptance-gate evaluation and artifact
+formatting.
 """
 
 from __future__ import annotations
@@ -121,7 +122,7 @@ def format_scorecard(metrics: dict[str, Any]) -> str:
         f"max = {metrics['max_allowed_advantage_removed_ratio']:.3f} |\n"
         f"| Residual venue z-scores | "
         f"{_format_gate(metrics['residual_z_score_pass'])} | "
-        f"max |z| = {metrics['max_abs_residual_z_score']:.3f}, "
+        f"max abs(z) = {metrics['max_abs_residual_z_score']:.3f}, "
         f"limit < {metrics['max_allowed_abs_residual_z_score']:.3f} |\n\n"
         "## Summary Metrics\n\n"
         f"- Overall pass: {_format_gate(metrics['overall_pass'])}\n"
@@ -213,7 +214,7 @@ def main() -> None:
     )
     _progress(
         f"Worst residual venue: {metrics['worst_residual_venue']} "
-        f"(max |z|={metrics['max_abs_residual_z_score']:.3f}).",
+        f"(max abs(z)={metrics['max_abs_residual_z_score']:.3f}).",
         run_started_at,
     )
 
