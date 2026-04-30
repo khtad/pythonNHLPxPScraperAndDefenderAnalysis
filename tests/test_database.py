@@ -442,6 +442,7 @@ def _shot_dict(game_id, event_idx, version=None, **overrides):
         "period": 1,
         "time_in_period": "10:00",
         "time_remaining_seconds": 1200,
+        "shot_event_type": "shot-on-goal",
         "shot_type": "wrist",
         "x_coord": 60.0,
         "y_coord": 5.0,
@@ -449,6 +450,8 @@ def _shot_dict(game_id, event_idx, version=None, **overrides):
         "angle_to_goal": 10.0,
         "is_goal": 0,
         "shooting_team_id": 1,
+        "score_state": "tied",
+        "manpower_state": "5v5",
     }
     base.update(overrides)
     if version is not None:
@@ -562,18 +565,20 @@ def test_load_game_shots_empty_game(conn):
 
 def test_load_training_shot_events_excludes_pre_2009_seasons(conn):
     _seed_game_env(conn)
-    _seed_game(conn, 810, "20082009", n_shots=1)
-    _seed_game(conn, 811, "20092010", n_shots=1)
+    _seed_game(conn, 2008020810, "20082009", n_shots=1)
+    _seed_game(conn, 2009020811, "20092010", n_shots=1)
 
     rows = load_training_shot_events(conn)
 
-    assert [(r["game_id"], r["season"]) for r in rows] == [(811, "20092010")]
+    assert [(r["game_id"], r["season"]) for r in rows] == [
+        (2009020811, "20092010")
+    ]
 
 
 def test_load_training_shot_events_excludes_null_distance_rows(conn):
     _seed_game_env(conn)
-    _seed_game(conn, 812, "20092010", n_shots=1)
-    insert_shot_events(conn, [_shot_dict(812, 99, distance_to_goal=None)])
+    _seed_game(conn, 2009020812, "20092010", n_shots=1)
+    insert_shot_events(conn, [_shot_dict(2009020812, 99, distance_to_goal=None)])
 
     rows = load_training_shot_events(conn)
 
@@ -583,14 +588,91 @@ def test_load_training_shot_events_excludes_null_distance_rows(conn):
 
 def test_load_training_shot_events_excludes_blocked_shots(conn):
     _seed_game_env(conn)
-    _seed_game(conn, 813, "20092010", n_shots=1)
+    _seed_game(conn, 2009020813, "20092010", n_shots=1)
     insert_shot_events(conn, [
-        _shot_dict(813, 99, shot_event_type="blocked-shot"),
+        _shot_dict(2009020813, 99, shot_event_type="blocked-shot"),
     ])
 
     rows = load_training_shot_events(conn)
 
     assert [r["event_idx"] for r in rows] == [0]
+
+
+def test_load_training_shot_events_excludes_non_training_game_types(conn):
+    _seed_game_env(conn)
+    _seed_game(conn, 2009010001, "20092010", n_shots=1)
+    _seed_game(conn, 2009020001, "20092010", n_shots=1)
+    _seed_game(conn, 2009030001, "20092010", n_shots=1)
+    _seed_game(conn, 2009040001, "20092010", n_shots=1)
+
+    rows = load_training_shot_events(conn)
+
+    assert [r["game_id"] for r in rows] == [2009020001, 2009030001]
+
+
+def test_load_training_shot_events_excludes_regular_season_shootouts(conn):
+    _seed_game_env(conn)
+    upsert_game_metadata(
+        conn, 2009020002, game_date="2009-10-15", season="20092010",
+        home_team_id=1, away_team_id=2,
+    )
+    insert_shot_events(conn, [
+        _shot_dict(2009020002, 1, period=4),
+        _shot_dict(2009020002, 2, period=5),
+    ])
+
+    rows = load_training_shot_events(conn)
+
+    assert [(r["game_id"], r["event_idx"], r["period"]) for r in rows] == [
+        (2009020002, 1, 4)
+    ]
+
+
+def test_load_training_shot_events_retains_playoff_multi_overtime(conn):
+    _seed_game_env(conn)
+    upsert_game_metadata(
+        conn, 2009030003, game_date="2010-04-20", season="20092010",
+        home_team_id=1, away_team_id=2,
+    )
+    insert_shot_events(conn, [
+        _shot_dict(2009030003, 1, period=5),
+        _shot_dict(2009030003, 2, period=6),
+    ])
+
+    rows = load_training_shot_events(conn)
+
+    assert [(r["game_id"], r["event_idx"], r["period"]) for r in rows] == [
+        (2009030003, 1, 5),
+        (2009030003, 2, 6),
+    ]
+
+
+def test_load_training_shot_events_excludes_null_manpower_rows(conn):
+    _seed_game_env(conn)
+    _seed_game(conn, 2009020814, "20092010", n_shots=1)
+    insert_shot_events(conn, [_shot_dict(2009020814, 99, manpower_state=None)])
+
+    rows = load_training_shot_events(conn)
+
+    assert [r["event_idx"] for r in rows] == [0]
+
+
+def test_load_training_shot_events_excludes_target_event_mismatches(conn):
+    _seed_game_env(conn)
+    upsert_game_metadata(
+        conn, 2009020815, game_date="2009-10-15", season="20092010",
+        home_team_id=1, away_team_id=2,
+    )
+    insert_shot_events(conn, [
+        _shot_dict(2009020815, 1, shot_event_type="goal", is_goal=1),
+        _shot_dict(2009020815, 2, shot_event_type="goal", is_goal=0),
+        _shot_dict(2009020815, 3, shot_event_type="shot-on-goal", is_goal=1),
+        _shot_dict(2009020815, 4, shot_event_type="missed-shot", is_goal=0),
+    ])
+
+    rows = load_training_shot_events(conn)
+
+    assert [r["event_idx"] for r in rows] == [1, 4]
 
 
 def test_create_shifts_table_creates_expected_columns(conn):

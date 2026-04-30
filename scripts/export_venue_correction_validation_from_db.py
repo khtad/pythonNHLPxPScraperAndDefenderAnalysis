@@ -30,7 +30,11 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from database import (  # noqa: E402
-    BLOCKED_SHOT_EVENT_TYPE,
+    GOAL_SHOT_EVENT_TYPE,
+    MODEL_TRAINING_GAME_TYPES,
+    NON_GOAL_TRAINING_SHOT_EVENT_TYPES,
+    REGULAR_SEASON_GAME_TYPE,
+    REGULAR_SEASON_SHOOTOUT_PERIOD_MIN,
     VALID_SHOT_TYPES,
     _MIN_TRAINING_SEASON,
     _VENUE_CORRECTION_METHOD,
@@ -83,13 +87,31 @@ def _load_training_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
            WHERE se.event_schema_version = ?
              AND g.season IS NOT NULL
              AND g.season >= ?
+             AND substr(CAST(se.game_id AS TEXT), 5, 2) IN (?, ?)
+             AND NOT (
+                 substr(CAST(se.game_id AS TEXT), 5, 2) = ?
+                 AND se.period >= ?
+             )
              AND g.venue_name IS NOT NULL
              AND se.distance_to_goal IS NOT NULL
              AND se.angle_to_goal IS NOT NULL
              AND se.shot_type IS NOT NULL
-             AND (se.shot_event_type IS NULL OR se.shot_event_type != ?)
+             AND se.manpower_state IS NOT NULL
+             AND se.score_state IS NOT NULL
+             AND (
+                 (se.shot_event_type = ? AND se.is_goal = 1)
+                 OR (se.shot_event_type IN (?, ?) AND se.is_goal = 0)
+             )
            ORDER BY g.season, se.game_id, se.event_idx""",
-        (_XG_EVENT_SCHEMA_VERSION, _MIN_TRAINING_SEASON, BLOCKED_SHOT_EVENT_TYPE),
+        (
+            _XG_EVENT_SCHEMA_VERSION,
+            _MIN_TRAINING_SEASON,
+            *MODEL_TRAINING_GAME_TYPES,
+            REGULAR_SEASON_GAME_TYPE,
+            REGULAR_SEASON_SHOOTOUT_PERIOD_MIN,
+            GOAL_SHOT_EVENT_TYPE,
+            *NON_GOAL_TRAINING_SHOT_EVENT_TYPES,
+        ),
     )
     return cursor.fetchall()
 

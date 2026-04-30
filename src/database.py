@@ -76,6 +76,12 @@ VALID_SHOT_EVENT_TYPES = (
     "blocked-shot",
 )
 BLOCKED_SHOT_EVENT_TYPE = "blocked-shot"
+GOAL_SHOT_EVENT_TYPE = "goal"
+NON_GOAL_TRAINING_SHOT_EVENT_TYPES = ("shot-on-goal", "missed-shot")
+REGULAR_SEASON_GAME_TYPE = "02"
+PLAYOFF_GAME_TYPE = "03"
+MODEL_TRAINING_GAME_TYPES = (REGULAR_SEASON_GAME_TYPE, PLAYOFF_GAME_TYPE)
+REGULAR_SEASON_SHOOTOUT_PERIOD_MIN = 5
 _LEGACY_V4_EVENT_SCHEMA_VERSION = "v4"
 _NON_BLOCKED_SHOT_EVENT_TYPES = tuple(
     event_type for event_type in VALID_SHOT_EVENT_TYPES
@@ -164,9 +170,10 @@ def load_training_shot_events(conn, min_season=_MIN_TRAINING_SEASON):
     """Return model-training shot rows for seasons at/after ``min_season``.
 
     This enforces the Phase 2.5.5 pre-2009 triage decision: pre-2009 seasons
-    are excluded from model training inputs. The query also enforces non-null
-    geometric features required for baseline xG fitting and excludes blocked
-    shots from model-training inputs.
+    are excluded from model training inputs. The query also narrows training
+    to regular season/playoff in-game shots, excludes regular-season
+    shootouts and blocked shots, enforces non-null core features, and rejects
+    rows where the event type disagrees with the binary target.
     """
     cursor = conn.cursor()
     cursor.execute(
@@ -181,12 +188,30 @@ def load_training_shot_events(conn, min_season=_MIN_TRAINING_SEASON):
            WHERE se.event_schema_version = ?
              AND g.season IS NOT NULL
              AND g.season >= ?
+             AND substr(CAST(se.game_id AS TEXT), 5, 2) IN (?, ?)
+             AND NOT (
+                 substr(CAST(se.game_id AS TEXT), 5, 2) = ?
+                 AND se.period >= ?
+             )
              AND se.distance_to_goal IS NOT NULL
              AND se.angle_to_goal IS NOT NULL
              AND se.shot_type IS NOT NULL
-             AND (se.shot_event_type IS NULL OR se.shot_event_type != ?)
+             AND se.manpower_state IS NOT NULL
+             AND se.score_state IS NOT NULL
+             AND (
+                 (se.shot_event_type = ? AND se.is_goal = 1)
+                 OR (se.shot_event_type IN (?, ?) AND se.is_goal = 0)
+             )
            ORDER BY g.season, se.game_id, se.event_idx""",
-        (_XG_EVENT_SCHEMA_VERSION, str(min_season), BLOCKED_SHOT_EVENT_TYPE),
+        (
+            _XG_EVENT_SCHEMA_VERSION,
+            str(min_season),
+            *MODEL_TRAINING_GAME_TYPES,
+            REGULAR_SEASON_GAME_TYPE,
+            REGULAR_SEASON_SHOOTOUT_PERIOD_MIN,
+            GOAL_SHOT_EVENT_TYPE,
+            *NON_GOAL_TRAINING_SHOT_EVENT_TYPES,
+        ),
     )
     columns = [desc[0] for desc in cursor.description]
     return [dict(zip(columns, row)) for row in cursor.fetchall()]

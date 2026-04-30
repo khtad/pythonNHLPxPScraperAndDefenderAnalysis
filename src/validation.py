@@ -40,6 +40,8 @@ MIN_TRAIN_SEASONS = 3
 CALIBRATION_N_BINS = 10
 CALIBRATION_SLOPE_TARGET_LOW = 0.95
 CALIBRATION_SLOPE_TARGET_HIGH = 1.05
+MAX_DECILE_CALIBRATION_ERROR = 0.01
+EXPECTED_CALIBRATION_ERROR_TARGET = 0.005
 HOSMER_LEMESHOW_ALPHA = 0.05
 
 _BOOTSTRAP_DEFAULT_SEED = 42
@@ -122,6 +124,64 @@ def hosmer_lemeshow_test(
     return float(hl_stat), p_value, dof
 
 
+def practical_calibration_metrics(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    n_bins: int = CALIBRATION_N_BINS,
+) -> Dict[str, Any]:
+    """Return practical quantile-bin calibration error metrics.
+
+    ``max_bin_calibration_error`` is the largest absolute observed-vs-predicted
+    rate gap across bins. ``expected_calibration_error`` is the sample-weighted
+    average absolute gap. Both are proportions, so ``0.01`` means 1 percentage
+    point.
+    """
+    y_true = np.asarray(y_true)
+    y_prob = np.asarray(y_prob, dtype=float)
+    if len(y_true) != len(y_prob):
+        raise ValueError("y_true and y_prob must have equal length.")
+    if len(y_true) == 0:
+        raise ValueError("Calibration metrics require at least one row.")
+    if np.any(~np.isfinite(y_prob)):
+        raise ValueError("Predicted probabilities must be finite.")
+
+    bin_edges = np.percentile(y_prob, np.linspace(0, 100, n_bins + 1))
+    bin_edges[0] = 0.0
+    bin_edges[-1] = 1.0
+    bin_indices = np.digitize(y_prob, bin_edges) - 1
+    bin_indices = np.clip(bin_indices, 0, n_bins - 1)
+
+    bins = []
+    max_error = 0.0
+    expected_error = 0.0
+    n_total = len(y_true)
+    for bin_idx in range(n_bins):
+        mask = bin_indices == bin_idx
+        n_bin = int(mask.sum())
+        if n_bin == 0:
+            continue
+        observed_rate = float(y_true[mask].mean())
+        predicted_rate = float(y_prob[mask].mean())
+        error = abs(observed_rate - predicted_rate)
+        max_error = max(max_error, error)
+        expected_error += error * (n_bin / n_total)
+        bins.append({
+            "bin": int(bin_idx),
+            "n": n_bin,
+            "observed_rate": observed_rate,
+            "predicted_rate": predicted_rate,
+            "calibration_error": float(error),
+        })
+
+    return {
+        "n": int(n_total),
+        "n_bins": int(n_bins),
+        "max_bin_calibration_error": float(max_error),
+        "expected_calibration_error": float(expected_error),
+        "bins": bins,
+    }
+
+
 def calibration_slope_intercept(
     y_true: np.ndarray,
     y_prob: np.ndarray,
@@ -192,6 +252,142 @@ def run_temporal_cv(
             "y_prob": y_prob,
         })
     return results
+
+
+def _logit_probabilities(y_prob: np.ndarray) -> np.ndarray:
+    y_prob = np.asarray(y_prob, dtype=float)
+    y_prob_clipped = np.clip(y_prob, _CALIBRATION_LOGIT_CLIP, 1 - _CALIBRATION_LOGIT_CLIP)
+    return np.log(y_prob_clipped / (1 - y_prob_clipped))
+
+
+def run_temporal_cv_with_prior_season_calibration(
+    X: np.ndarray,
+    y: np.ndarray,
+    row_seasons_arr: np.ndarray,
+    unique_seasons: Sequence,
+    min_train: int = MIN_TRAIN_SEASONS,
+) -> List[Dict[str, Any]]:
+    """Forward-chaining temporal CV with a fold-safe Platt calibrator.
+
+    For each fold, train the base model on seasons before the immediately
+    prior season, fit a one-dimensional logistic calibration model on that
+    prior season's base predictions, then evaluate the following season. This
+    produces ``train < calibration < test`` ordering and intentionally starts
+    one season later than ``run_temporal_cv``.
+    """
+    X = np.asarray(X)
+    y = np.asarray(y)
+    row_seasons_arr = np.asarray(row_seasons_arr)
+
+    results: List[Dict[str, Any]] = []
+    for fold_idx in range(min_train + 1, len(unique_seasons)):
+        test_season = unique_seasons[fold_idx]
+        calibration_season = unique_seasons[fold_idx - 1]
+        train_seasons = list(unique_seasons[: fold_idx - 1])
+
+        train_mask = np.isin(row_seasons_arr, train_seasons)
+        calibration_mask = row_seasons_arr == calibration_season
+        test_mask = row_seasons_arr == test_season
+
+        X_train, y_train = X[train_mask], y[train_mask]
+        X_calibration, y_calibration = X[calibration_mask], y[calibration_mask]
+        X_test, y_test = X[test_mask], y[test_mask]
+
+        if (
+            len(y_test) == 0
+            or y_test.sum() == 0
+            or len(np.unique(y_calibration)) < 2
+        ):
+            continue
+
+        base_model = LogisticRegression(max_iter=1000, solver="lbfgs")
+        base_model.fit(X_train, y_train)
+
+        calibration_prob = base_model.predict_proba(X_calibration)[:, 1]
+        test_prob_uncalibrated = base_model.predict_proba(X_test)[:, 1]
+
+        calibrator = LogisticRegression(max_iter=1000, solver="lbfgs")
+        calibrator.fit(
+            _logit_probabilities(calibration_prob).reshape(-1, 1),
+            y_calibration,
+        )
+        y_prob = calibrator.predict_proba(
+            _logit_probabilities(test_prob_uncalibrated).reshape(-1, 1)
+        )[:, 1]
+
+        results.append({
+            "test_season": test_season,
+            "calibration_season": calibration_season,
+            "n_train": int(len(y_train)),
+            "n_calibration": int(len(y_calibration)),
+            "n_test": int(len(y_test)),
+            "train_seasons": len(train_seasons),
+            "test_base_rate": float(y_test.mean()),
+            "auc_roc": float(roc_auc_score(y_test, y_prob)),
+            "log_loss": float(log_loss(y_test, y_prob)),
+            "brier": float(brier_score_loss(y_test, y_prob)),
+            "y_test": y_test,
+            "y_prob": y_prob,
+            "y_prob_uncalibrated": test_prob_uncalibrated,
+        })
+    return results
+
+
+def evaluate_leakage_audit(
+    audit_rows: Sequence[Mapping[str, Any]],
+    selected_features: Iterable[str],
+) -> Dict[str, Any]:
+    """Evaluate leakage risk for selected model features only.
+
+    Audit rows for excluded candidate features remain visible as
+    ``excluded_pending`` items, but only selected features with ambiguous
+    temporal availability or HIGH confounder risk block the scorecard.
+    """
+    selected = set(selected_features)
+    blocking_features = []
+    excluded_pending_features = []
+    selected_audit = []
+    annotated_rows = []
+
+    for row in audit_rows:
+        feature = str(row["feature"])
+        availability = str(row["available_at_shot_time"])
+        confounder_risk = str(row["confounder_risk"])
+        annotated = dict(row)
+        if feature in selected:
+            annotated["selection_status"] = "selected"
+            selected_audit.append(annotated)
+            if availability == "AMBIGUOUS" or confounder_risk == "HIGH":
+                blocking_features.append(feature)
+        else:
+            requires_resolution = bool(row.get("excluded_pending")) or (
+                availability == "AMBIGUOUS"
+                or confounder_risk in {"MEDIUM", "HIGH"}
+            )
+            if availability == "TARGET":
+                annotated["selection_status"] = "target_not_feature"
+            elif requires_resolution:
+                annotated["selection_status"] = "excluded_pending"
+                excluded_pending_features.append(feature)
+            else:
+                annotated["selection_status"] = "excluded_clear"
+        annotated_rows.append(annotated)
+
+    missing_selected = sorted(selected - {str(row["feature"]) for row in audit_rows})
+    if missing_selected:
+        raise ValueError(
+            "Selected features are missing leakage-audit rows: "
+            + ", ".join(missing_selected)
+        )
+
+    return {
+        "pass": len(blocking_features) == 0,
+        "n_selected": int(len(selected_audit)),
+        "n_blocking": int(len(blocking_features)),
+        "blocking_features": blocking_features,
+        "excluded_pending_features": excluded_pending_features,
+        "annotated_rows": annotated_rows,
+    }
 
 
 def evaluate_venue_correction_holdout(

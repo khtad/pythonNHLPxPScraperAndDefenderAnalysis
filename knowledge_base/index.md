@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-04-28 (Recorded live validation and venue-correction scorecard runs)
+> Last updated: 2026-04-30 (Recorded scorecard remediation, calibration-policy update, and tightened training contract)
 
 ## Concepts
 
@@ -15,7 +15,7 @@
 ## Methods
 
 - [Temporal Cross-Validation](wiki/methods/temporal-cross-validation.md) — Season-block CV for hockey data: why random splits leak future information, and how to implement forward-chaining temporal CV.
-- [Calibration Analysis](wiki/methods/calibration-analysis.md) — Reliability diagrams, Hosmer-Lemeshow goodness-of-fit, and calibration slope/intercept for xG probability verification.
+- [Calibration Analysis](wiki/methods/calibration-analysis.md) — Reliability diagrams, practical calibration error gates, Hosmer-Lemeshow diagnostics, and calibration slope/intercept for xG probability verification.
 - [Bootstrapping and Confidence Intervals](wiki/methods/bootstrapping-confidence-intervals.md) — Bootstrap CIs for goal rates, Wilson intervals, and sample size adequacy checks at ~8% base rate.
 - [RAPM (Regularized Adjusted Plus-Minus)](wiki/methods/rapm-regularized-adjusted-plus-minus.md) — Ridge/elastic-net regression to isolate individual player impact from on-ice context using xG residuals.
 - [Effect Size Measures](wiki/methods/effect-size-measures.md) — Cohen's h/d for practical vs statistical significance, with decision rules for this project.

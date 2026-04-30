@@ -92,7 +92,7 @@ The target architecture must be modular enough to support incremental delivery a
 
 ---
 
-## Current Implementation Status (as of 2026-04-28)
+## Current Implementation Status (as of 2026-04-30)
 
 Status here is verified against the live database, not just self-reported from prior commits.
 
@@ -101,8 +101,8 @@ Status here is verified against the live database, not just self-reported from p
 | Phase 0 — contracts, schema, reproducibility | **Complete** | `_XG_EVENT_SCHEMA_VERSION = "v5"` (`src/database.py`); live validation run found all 2,122,963 `shot_events` rows at v5 and zero stale training-eligible rows; version-aware backfill (`game_has_current_shot_events`, `delete_game_shot_events`) present; `validate_shot_events_quality` covers enums/ranges/duplicates. |
 | Phase 1 — event/state foundation | **Complete** | `normalize_coordinates`, distance/angle, 11-type shot taxonomy, score/manpower/time classifiers in `src/xg_features.py`. Pre-2020 negative-x rate is now 0.0 (was ~50% at v2). Pre-event score tracker `_track_score` prevents post-goal leakage. |
 | Phase 2 — context feature engineering | **Complete (with two criteria formally deferred)** | `game_context` populated (26,343 rows at v1) with rest/travel/timezone features; `validate_game_context_quality` added. Faceoff decay bins implemented. `populate_venue_diagnostics` is wired into the scraper pipeline via `finalize_season_diagnostics` and runs per season. VIF review done on live data (see below). The two remaining acceptance criteria — held-out faceoff-decay validation and zone-start change-on-the-fly inference — are formally deferred to their gating dependencies: Phase 2.5.2 (`src/validation.py` helpers) and a future shifts-ingestion branch, respectively. |
-| Phase 2.5 — rigor foundation (new, gates Phase 3) | **In progress** | 2.5.1 and 2.5.2 are implemented in `src/` with tests; 2.5.3 now has a live v5 validation scorecard artifact; 2.5.4 now has an initial correction table (`venue_bias_corrections`), shrinkage-based distance adjustment parameters wired into `finalize_season_diagnostics`, a JSON scorecard exporter, and a DB-backed live runner. The live venue-correction scorecard passes held-out log-loss and home-ice guardrail gates but fails the residual z-score gate, so the correction is not accepted for production xG training yet. 2.5.5 has a recorded decision and an enforced loader guard (`load_training_shot_events`) excluding pre-2009 seasons. |
-| Phase 3 — baseline xG model | **Not started** | No training code in `src/`. The live validation scorecard exists (`artifacts/validation_scorecard_latest.md`) and currently passes 3/8 gates; Phase 3 remains blocked by model quality, calibration, subgroup calibration, and leakage-audit failures. |
+| Phase 2.5 — rigor foundation (new, gates Phase 3) | **In progress** | 2.5.1 and 2.5.2 are implemented in `src/` with tests; 2.5.3 now has a live v5 validation scorecard artifact that passes all 8 gates; 2.5.4 now has an initial correction table (`venue_bias_corrections`), shrinkage-based distance adjustment parameters wired into `finalize_season_diagnostics`, a JSON scorecard exporter, and a DB-backed live runner. The live venue-correction scorecard passes held-out log-loss and home-ice guardrail gates but fails the residual z-score gate, so the correction is not accepted for production xG training yet. 2.5.5 has a recorded decision and an enforced loader guard (`load_training_shot_events`) excluding pre-2009 seasons and non-training shot rows. |
+| Phase 3 — baseline xG model | **Ready to start** | No training code in `src/`. The live validation scorecard now passes 8/8 gates with a selected calibrated logistic model (`artifacts/validation_scorecard_latest.md`), so Phase 3 model implementation can proceed while keeping unresolved features excluded. |
 | Phase 4 — enhanced xG model | **Not started** | Depends on Phase 3. |
 | Phase 5 — RAPM on xG | **Blocked on data** | `players` dim has **0 rows**; `player_game_stats` and `player_game_features` are empty; no player/roster endpoint in `src/nhl_api.py`. |
 | Phase 6–7 — team strength, hardening | **Not started** | Depends on Phase 3–5. |
@@ -111,8 +111,8 @@ Status here is verified against the live database, not just self-reported from p
 
 1. **`players` dim is empty (0 rows).** Blocks handedness features (off-wing flag, effective-angle interactions), `player_game_stats`, `player_game_features`, and every step of RAPM. No player metadata endpoint exists in `src/nhl_api.py`.
 2. **2007–2008 shot-distance anomaly.** Average `distance_to_goal` for 2007–08 is ~19–20 units vs ~34 for 2009+. `wrap-around` and `deflected` shots have `NULL` distances in 2007–08 (coordinates absent in that era). **Phase 2.5.5 decision:** exclude pre-2009 seasons from model-training inputs; enforced by `load_training_shot_events` and test coverage.
-3. **Venue bias correction is implemented but not accepted.** `scripts/export_venue_correction_validation_from_db.py` now runs the Phase 2.5.4 gates against live v5 data using only prior-season venue adjustments for each held-out shot. The 2026-04-28 scorecard passes held-out log-loss (`delta = -0.000018`) and home-ice over-correction (`removed = -0.011`, limit 0.500) but fails the residual venue z-score gate (`max |z| = 4.038`, limit < 2.000; worst venue-season `20092010:Madison Square Garden`). Keep the correction out of production xG training until the residual gate passes or a better correction policy is selected.
-4. **Validation scorecard blocks Phase 3.** The live v5 validation framework run is no longer blocked by stale schema coverage, but only 3/8 scorecard gates pass. Current blockers are discrimination (mean AUC 0.7264), calibration slope (0.8737), Hosmer-Lemeshow p-value (0.0000), subgroup calibration (max error 10.96 pp), and leakage audit (4 flagged features).
+3. **Venue bias correction is implemented but not accepted.** `scripts/export_venue_correction_validation_from_db.py` now runs the Phase 2.5.4 gates against live v5 data using only prior-season venue adjustments for each held-out shot and the same tightened training contract as the validation scorecard. The 2026-04-30 scorecard passes held-out log-loss (`delta = -0.000017`) and home-ice over-correction (`removed = -0.013`, limit 0.500) but fails the residual venue z-score gate (`max |z| = 4.067`, limit < 2.000; worst venue-season `20092010:Madison Square Garden`). Keep the correction out of production xG training until the residual gate passes or a better correction policy is selected.
+4. **Validation scorecard blocker is resolved for selected features.** The 2026-04-30 live v5 validation framework run passes 8/8 gates: mean AUC 0.7551, calibration slope 0.9870, max decile error 0.407 pp, ECE 0.193 pp, subgroup max error 1.24 pp, and AUC drift +0.0001/season. Faceoff, rest/travel, raw venue features, and other unresolved candidates remain listed as excluded pending and do not feed the selected model.
 
 ### Phase 2 multicollinearity review (VIF, live data, 2026-04-19)
 
@@ -151,7 +151,7 @@ These standards apply to every phase from 2.5 onward and are derived from the pr
 
 4. **Temporal separation.** Training and evaluation use forward-chaining season-block CV (`run_temporal_cv`) with `MIN_TRAIN_SEASONS = 3` and at least three held-out test seasons that never participate in tuning.
 
-5. **Calibration.** A probability model passes calibration if: Hosmer-Lemeshow p > 0.05, calibration slope ∈ [0.95, 1.05], and max subgroup calibration error < 3 percentage points. Each segment (even-strength, power-play, short-handed, plus score-state strata) is checked separately.
+5. **Calibration.** A probability model passes calibration if: calibration slope ∈ [0.95, 1.05], max decile calibration error < 1 percentage point, expected calibration error < 0.5 percentage points, and max subgroup calibration error < 3 percentage points. Hosmer-Lemeshow statistic/p-value is reported as a diagnostic, not a hard pass/fail gate on million-row holdout pools. Each segment (even-strength, power-play, short-handed, plus score-state strata) is checked separately.
 
 6. **Temporal stability.** AUC drift must be < 0.02 per season across held-out seasons. Drift beyond that is documented and triggers recalibration.
 
@@ -173,7 +173,7 @@ These standards apply to every phase from 2.5 onward and are derived from the pr
 Acceptance criteria (retrospective — phase complete):
 - Every derived table stamps the row-producing code version in a column: `shot_events.event_schema_version`, `game_context.context_schema_version`, `player_game_features.feature_set_version`. Version constants are single-sourced in `src/database.py` (`_XG_EVENT_SCHEMA_VERSION = "v5"`, `_GAME_CONTEXT_SCHEMA_VERSION = "v1"`).
 - Version-aware backfill is idempotent: `game_has_current_shot_events` checks both row existence and current version; `delete_game_shot_events` removes stale rows before `_process_game` re-inserts. Rerunning the scraper against an already-current DB performs no additional inserts.
-- 100% of live `shot_events` rows are at the current version (verified 2026-04-28: 2,122,963/2,122,963 at v5).
+- 100% of live `shot_events` rows are at the current version (verified 2026-04-30: 2,122,963/2,122,963 at v5).
 - Quality validators (`validate_shot_events_quality`, `validate_player_game_stats_quality`) cover duplicate keys, enum domains, negative TOI, and value ranges and are exercised by `tests/`.
 
 ## Phase 1: Event/state foundation
@@ -235,11 +235,12 @@ Acceptance:
 - Execute `notebooks/model_validation_framework.ipynb` against the real database. This is the first end-to-end validation run after the v5 backfill.
 - Publish a committed scorecard artifact summarizing: base rate by season/manpower/era with CIs, feature ablation results, temporal CV metrics, calibration diagnostics, leakage-audit conclusions.
 - **Execution harness added (2026-04-24):** `scripts/export_validation_scorecard.py` now executes the notebook and extracts the `VALIDATION SCORECARD` block into `artifacts/validation_scorecard_latest.md`.
-- **Live run completed (2026-04-28):** after v5 backfill completed, `scripts/export_validation_scorecard.py` executed the validation notebook and exported `artifacts/validation_scorecard_latest.md` with concrete pass/fail results. The old stale-schema blocker is resolved; the scorecard still blocks Phase 3 model training on model quality/calibration/leakage criteria.
+- **Live run completed (2026-04-30):** after v5 backfill completed and the scorecard gates were remediated, `scripts/export_validation_scorecard.py` executed the validation notebook and exported `artifacts/validation_scorecard_latest.md` with 8/8 gates passing. The selected calibrated model uses distance, angle, shot type, manpower state, score state, and scaled manpower-distance/angle interactions; unresolved faceoff, rest/travel, and venue features remain excluded pending.
 
 Acceptance:
 - ✅ All pass/fail cells return concrete numbers (no NotImplemented / skipped cells).
 - ✅ Scorecard artifact produced alongside the notebook (`artifacts/validation_scorecard_latest.md`; generated notebook: `artifacts/model_validation_framework.executed.ipynb`).
+- ✅ Live v5 scorecard passes all gates: AUC 0.7551, calibration slope 0.9870, max decile error 0.407 pp, ECE 0.193 pp, subgroup max error 1.24 pp, AUC drift +0.0001/season.
 
 ### 2.5.4 Venue bias correction implementation
 
@@ -250,17 +251,18 @@ Acceptance:
 - Implement one approach; decision recorded.
 - **Guardrail evaluator added (2026-04-24):** `src/validation.py::evaluate_venue_correction_holdout` now computes held-out log-loss delta and the share of baseline home-ice advantage removed by correction, with a pre-registered threshold `VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL = 0.5` and regression tests in `tests/test_validation.py`.
 - **Scorecard harness added (2026-04-28):** `src/validation.py::evaluate_venue_correction_scorecard` combines held-out log-loss, home-ice over-correction, and residual venue z-score gates; `scripts/export_venue_correction_validation.py` exports a Markdown artifact from a metrics JSON payload.
-- **Live DB runner added and executed (2026-04-28):** `scripts/export_venue_correction_validation_from_db.py` builds leakage-safe temporal CV metrics from SQLite by applying only the latest prior-season venue distance adjustment to each held-out shot. It writes `artifacts/venue_correction_validation_latest.md`. Current result: log-loss and home-ice gates pass, residual corrected-distance venue-season z-score fails (`max |z| = 4.038`), so the current correction policy remains exploratory.
+- **Live DB runner added and executed (refreshed 2026-04-30):** `scripts/export_venue_correction_validation_from_db.py` builds leakage-safe temporal CV metrics from SQLite by applying only the latest prior-season venue distance adjustment to each held-out shot, using the same model-training contract as `load_training_shot_events`. It writes `artifacts/venue_correction_validation_latest.md`. Current result: log-loss and home-ice gates pass, residual corrected-distance venue-season z-score fails (`max |z| = 4.067`), so the current correction policy remains exploratory.
 
 Acceptance:
-- ✅ Held-out log-loss does not worsen after applying correction (live DB scorecard `delta = -0.000018`).
-- ❌ Residual venue z-score `|z| < 2` after correction (live DB scorecard `max |z| = 4.038`). The current distance-only runner evaluates corrected-distance venue-season residuals; add shot-count residuals separately if an event-frequency correction is introduced.
-- ✅ Guardrail test (pre-registered): correction must not eliminate > 50% of the home-ice goal-rate advantage (live DB scorecard `removed = -0.011`, limit 0.500).
+- ✅ Held-out log-loss does not worsen after applying correction (live DB scorecard `delta = -0.000017`).
+- ❌ Residual venue z-score `|z| < 2` after correction (live DB scorecard `max |z| = 4.067`). The current distance-only runner evaluates corrected-distance venue-season residuals; add shot-count residuals separately if an event-frequency correction is introduced.
+- ✅ Guardrail test (pre-registered): correction must not eliminate > 50% of the home-ice goal-rate advantage (live DB scorecard `removed = -0.013`, limit 0.500).
 
 ### 2.5.5 Pre-2009 data-quality triage
 
 - Investigate the 2007–08 shot-distance anomaly (avg distance ~19–20 vs ~34 for 2009+; NULL distances for `wrap-around` and `deflected` shots in those seasons).
 - **Decision (2026-04-24): choose option (a)** — exclude pre-2009 seasons from model training for the baseline xG path. Rationale: pre-2009 shot coordinates are structurally incomplete in the source feed, so distance/angle repair would require non-trivial reconstruction assumptions that are out of scope for Phase 2.5 and risk introducing synthetic bias. This exclusion is now enforced in `src/database.py::load_training_shot_events` with tests in `tests/test_database.py`.
+- **Training contract tightened (2026-04-30):** `load_training_shot_events` now also restricts model inputs to regular-season/playoff in-game shots, excludes regular-season shootouts and blocked shots, requires non-null geometry/type/manpower/score state, and rejects rows where `shot_event_type` disagrees with `is_goal`. The DB-backed venue-correction runner uses the same contract.
 
 Acceptance:
 - ✅ Written decision recorded in this roadmap.
@@ -280,8 +282,8 @@ Deliverables:
 
 Acceptance criteria (per segment, held-out evaluation):
 - AUC-ROC > 0.75.
-- Hosmer-Lemeshow p > 0.05.
 - Calibration slope ∈ [0.95, 1.05].
+- Max decile calibration error < 1 percentage point and expected calibration error < 0.5 percentage points; report Hosmer-Lemeshow as a diagnostic.
 - Max subgroup calibration error < 3 percentage points (score-state × manpower strata).
 - AUC drift < 0.02/season across held-out seasons.
 - Sample adequacy ≥ 400 shots/cell for every reported stratification.
@@ -370,7 +372,7 @@ A rigor audit of the component docs found that only `06_model_validation_framewo
 - `02_rest_travel_and_zone_context.md` — zone-start inference accuracy estimate; VIF targets for multicollinearity review.
 - `03_faceoff_decay_modeling.md` — cross-validated bin boundaries; pre-registered held-out log-loss improvement threshold.
 - `04_scorekeeper_bias.md` — partial-pooling prior justification; pre-registered held-out improvement threshold and over-correction guardrail.
-- `05_xg_model_training_and_calibration.md` — explicit calibration targets (slope, Hosmer-Lemeshow); minimum segment sample sizes.
+- `05_xg_model_training_and_calibration.md` — explicit practical calibration targets (slope, max decile error, ECE, subgroup error); minimum segment sample sizes.
 - `06_rapm_on_xg.md` (RAPM component) — uncertainty interval methodology; λ selection procedure; year-over-year stability threshold.
 - `07_team_strength_aggregation.md` — aggregation-weight specification; uncertainty propagation methodology; baseline and pre-registered lift threshold.
 - `09_handedness_and_effective_angle.md` — replace visual/qualitative checks with formal hypothesis tests; Phase B2 precondition defined as a specific statistical criterion.

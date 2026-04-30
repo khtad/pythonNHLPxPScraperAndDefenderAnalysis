@@ -73,13 +73,14 @@ The four event types captured as shot events [1]:
 - **Missing `homeTeamDefendingSide` (pre-2020):** The NHL API does not provide this field for games before the 2019-2020 season. Schema v2 stored raw coordinates unchanged, resulting in ~50% of pre-2020 shots having wrong coordinates (negative x, ~150 ft average distance). Schema v3 adds a sign-based fallback heuristic that corrects ~96% of affected shots. See [Coordinate System and Normalization](coordinate-system-and-normalization.md) for full details [1][3].
 - **Faceoff tracking reset per period:** `seconds_since_faceoff` is NULL for shots before the first faceoff in a period [1].
 - **Historical backfill completeness bug:** The `_game_is_complete()` check once used `game_has_shot_events()` (any version) rather than `game_has_current_shot_events()` (current version), preventing stale rows from being detected. Fixed 2026-04-06 [3].
-- **Validation scorecard status:** As of 2026-04-28, the local live database has 2,122,963 `shot_events` rows at schema v5 and zero stale training-eligible rows. `scripts/export_validation_scorecard.py` now exports concrete live validation results rather than stopping on stale-schema coverage; Phase 3 remains blocked by model quality/calibration/leakage criteria in the scorecard artifact [4].
+- **Model-training contract:** `load_training_shot_events()` is the canonical DB-backed training loader. As of 2026-04-30 it requires schema v5, season >= 20092010, NHL game type 02 or 03, no regular-season period >= 5 shootouts, non-blocked shot-event types only, non-null distance/angle/shot type/manpower/score state, and consistency between `shot_event_type` and `is_goal` [2][4].
+- **Validation scorecard status:** As of 2026-04-30, the local live database has 2,122,963 `shot_events` rows at schema v5 and zero stale training-eligible rows. The tightened training contract yields 1,853,808 model-training rows. `scripts/export_validation_scorecard.py` exports a live scorecard that now passes all 8 gates for the selected calibrated model [4].
 
 ## Relevance to This Project
 
 This table is the foundation for all xG modeling work. Every feature engineering step (Phases 1-4) and model training step (Phase 3+) operates on or derives from `shot_events` rows. The schema version system ensures that when feature extraction logic changes (e.g., coordinate normalization improvements, new faceoff recency calculations), all historical data is automatically reprocessed to maintain consistency.
 
-Last verified: 2026-04-28 (schema version v5, `_XG_EVENT_SCHEMA_VERSION` in `src/database.py`; local live database has zero stale training-eligible rows).
+Last verified: 2026-04-30 (schema version v5, `_XG_EVENT_SCHEMA_VERSION` in `src/database.py`; local live database has zero stale training-eligible rows and 1,853,808 rows in the tightened model-training contract).
 
 ## Sources
 
@@ -98,6 +99,7 @@ Last verified: 2026-04-28 (schema version v5, `_XG_EVENT_SCHEMA_VERSION` in `src
 
 ## Revision History
 
+- 2026-04-30 — Updated. Documented the tightened model-training loader contract and passing live validation scorecard.
 - 2026-04-28 — Updated. Recorded completed v5 backfill, current validation-scorecard status, and the 11-value shot type enum.
 - 2026-04-28 — Updated. Refreshed schema description to v5, added `shot_event_type` and on-ice slots, and documented the partial v5 coverage blocker for Phase 2.5.3.
 - 2026-04-05 — Created. Initial compilation from src/xg_features.py and src/database.py.

@@ -61,11 +61,11 @@ The initial correction layer is now implemented in `src/database.py` [5]. `popul
 
 This is an implementation baseline, not final model policy. The Phase 2.5.4 scorecard harness is implemented: `evaluate_venue_correction_scorecard()` combines held-out log-loss, home-ice over-correction, and residual venue z-score gates, while `scripts/export_venue_correction_validation.py` formats the artifact [6].
 
-After the v5 backfill, `scripts/export_venue_correction_validation_from_db.py` ran the live validation from SQLite using forward-chaining temporal CV and only prior-season venue distance corrections for each held-out shot [6]. The first live scorecard passes held-out log-loss (`delta = -0.000018`) and the home-ice over-correction guardrail (`removed = -0.011`, limit 0.500), but fails the residual corrected-distance venue-season z-score gate (`max |z| = 4.038`, limit < 2.000; worst venue-season `20092010:Madison Square Garden`) [6]. The current shrinkage distance correction therefore remains exploratory and should not feed production xG training until that residual gate passes or a different correction policy is selected [2][6].
+After the v5 backfill, `scripts/export_venue_correction_validation_from_db.py` ran the live validation from SQLite using forward-chaining temporal CV and only prior-season venue distance corrections for each held-out shot [6]. The 2026-04-30 refresh uses the same tightened model-training contract as `load_training_shot_events`: schema v5, season >= 20092010, regular/playoff in-game shots, no regular-season shootouts, non-blocked target-consistent shot rows, and non-null core model features. The live scorecard passes held-out log-loss (`delta = -0.000017`) and the home-ice over-correction guardrail (`removed = -0.013`, limit 0.500), but fails the residual corrected-distance venue-season z-score gate (`max |z| = 4.067`, limit < 2.000; worst venue-season `20092010:Madison Square Garden`) [6]. The current shrinkage distance correction therefore remains exploratory and should not feed production xG training until that residual gate passes or a different correction policy is selected [2][6].
 
 The venue bias analysis was particularly sensitive to the v2 coordinate normalization bug. Pre-2020 data with ~50% unnormalized coordinates would have produced spurious venue effects that were actually normalization failures. The current v5 refresh resolves the stale-schema blocker, but venue-level coordinate analyses should still be re-derived after any future coordinate-normalization or correction-policy change.
 
-Last verified: 2026-04-28
+Last verified: 2026-04-30
 
 ## Sources
 
@@ -89,6 +89,7 @@ Last verified: 2026-04-28
 
 - 2026-04-28 - Recorded the live v5 DB-backed venue-correction validation result: log-loss and home-ice guardrails pass, residual corrected-distance z-score fails.
 - 2026-04-28 - Added Phase 2.5.4 scorecard harness status and source references for held-out/log-loss, home-ice guardrail, and residual z-score validation gates.
+- 2026-04-30 - Refreshed live DB scorecard metrics after the training-contract cleanup.
 
 - 2026-04-24 — Updated status: initial venue correction layer now implemented (`venue_bias_corrections` + shrinkage-adjusted distance correction), and wired into seasonal finalization; documented remaining held-out validation requirements.
 - 2026-04-19 — Documented that Phase 2 wired `finalize_season_diagnostics` into the pipeline, so `venue_bias_diagnostics` is now populated on every scrape/backfill run. Source [4] added.

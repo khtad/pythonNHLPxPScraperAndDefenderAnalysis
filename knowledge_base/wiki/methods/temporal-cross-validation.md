@@ -27,6 +27,8 @@ for k in range(m, n):
 
 The project uses `MIN_TRAIN_SEASONS = 3` to ensure the model has enough data to learn distance/angle/shot-type patterns before the first evaluation [1].
 
+For calibrated validation-scorecard predictions, the project now uses a stricter fold-safe variant: train the base model on seasons before the immediately prior season, fit a Platt calibrator on the immediately prior season, then evaluate the next season. This preserves `train < calibration < test` ordering and makes the first calibrated test fold one season later than the uncalibrated CV harness [1].
+
 ### Per-Fold Metrics
 
 Each fold records [1][2]:
@@ -52,7 +54,7 @@ Three specific leakage risks [2]:
 
 ### Reference Implementation
 
-The `run_temporal_cv()` function in `notebooks/model_validation_framework.ipynb` implements the full pipeline [1]. It accepts a feature matrix, label array, per-row season array, and sorted unique seasons, and returns a list of per-fold metric dictionaries. The baseline model is logistic regression on (distance, angle, shot_type) — the simplest credible xG model that feature additions must beat.
+The `run_temporal_cv()` and `run_temporal_cv_with_prior_season_calibration()` functions in `src/validation.py` implement the shared evaluation paths [1]. They accept a feature matrix, label array, per-row season array, and sorted unique seasons, and return a list of per-fold metric dictionaries. The ablation baseline remains logistic regression on (distance, angle, shot_type), while the selected live scorecard model adds audited manpower/score-state features and manpower-specific distance/angle interactions.
 
 ## Relevance to This Project
 
@@ -60,11 +62,11 @@ Temporal CV is the primary evaluation harness for all xG model development. Ever
 
 The validation scorecard in the framework notebook uses temporal CV results for its pass/fail criteria on discrimination, calibration, and temporal stability.
 
-Last verified: 2026-04-07
+Last verified: 2026-04-30
 
 ## Sources
 
-[1] Temporal CV implementation — `notebooks/model_validation_framework.ipynb` (`run_temporal_cv()`, Step 3)
+[1] Temporal CV implementation — `src/validation.py` (`run_temporal_cv()`, `run_temporal_cv_with_prior_season_calibration()`), `notebooks/model_validation_framework.ipynb` (Step 3)
 [2] Validation criteria and rigor requirements — `CLAUDE.md` (Statistical Analysis Rigor Requirements, items 5 and 7)
 [3] CV design rationale — `docs/xg_model_components/06_model_validation_framework.md` (Steps 3–5)
 
@@ -77,3 +79,4 @@ Last verified: 2026-04-07
 ## Revision History
 
 - 2026-04-07 — Created. Compiled from model_validation_framework.ipynb, CLAUDE.md rigor section, and component 06 design doc.
+- 2026-04-30 — Updated. Documented prior-season Platt calibration CV and the selected scorecard feature family.
