@@ -190,12 +190,13 @@ player-schema bootstrap
      - Prefer running pytest through the interpreter (`python -m pytest`) rather than relying on script launchers or PATH entries for the Codex bundled runtime.
 
 11. **Failure:** Full pytest runs on the Windows Codex desktop thread failed in `tmp_path` fixture setup with `PermissionError: [WinError 5] Access is denied` for pytest temp directories.
-   - **Cause:** Pytest's default temp root under `AppData\Local\Temp` was inaccessible in the sandbox, and workspace-local `--basetemp` directories created by sandboxed runs also became unreadable to later commands.
-   - **Fix:** Reran the suite outside the sandbox with explicit ignores for stale inaccessible temp directories and a fresh base temp: `python -m pytest -q --ignore=tests/test_rink_viz.py --ignore=tests/test_stats_helpers.py --ignore=pytest_tmp --ignore=.pytest-tmp --basetemp=pytest_tmp_escalated`, which completed with `342 passed`.
+   - **Cause:** Pytest's default temp root under `AppData\Local\Temp` was inaccessible in the sandbox, and workspace-local `--basetemp` directories created by sandboxed runs also became unreadable to later commands. A later run hit the same collection-phase permission pattern under `artifacts/nbconvert-warning-check-*`, then failed during pytest session cleanup when the sandbox lost access to its own fresh `--basetemp` directory.
+   - **Fix:** Reran the suite outside the sandbox with explicit ignores for stale inaccessible temp directories and a fresh base temp: `python -m pytest -q --ignore=tests/test_rink_viz.py --ignore=tests/test_stats_helpers.py --ignore=pytest_tmp --ignore=.pytest-tmp --basetemp=pytest_tmp_escalated`, which completed with `342 passed`. If stale nbconvert warning directories exist under `artifacts/`, add `--ignore=artifacts` to the rerun command because artifacts are not test sources.
    - **Rules to avoid repeat failures of this type:**
-     - If pytest fails before assertions with `PermissionError` under `pytest-of-*` or a workspace `pytest_tmp*` directory, treat it as a test-harness temp-dir issue, not a code failure.
+     - If pytest fails before assertions with `PermissionError` under `pytest-of-*`, a workspace `pytest_tmp*` directory, or `artifacts/nbconvert-warning-check-*`, treat it as a test-harness temp-dir issue, not a code failure.
      - Do not leave stale pytest temp directories in the collection tree if they are readable; remove them before rerunning. If they are unreadable, add explicit `--ignore=<dir>` flags so pytest does not try to collect them.
      - Prefer a fresh `--basetemp` value for each rerun after a temp-dir permission failure, and report any generated unreadable temp directories that could not be cleaned up.
+     - If pytest reaches test execution but crashes during session cleanup with `PermissionError` on the fresh `--basetemp`, rerun outside the sandbox; sandboxed reruns may keep generating unreadable temp roots even when the code is healthy.
 
 ## Derived-Data Versioning & Backfill
 

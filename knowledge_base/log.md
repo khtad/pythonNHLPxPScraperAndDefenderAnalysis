@@ -241,3 +241,12 @@
 - Updated `wiki/concepts/venue-scorekeeper-bias.md` - documented event-frequency diagnostics, paired away-team-season comparison, anomaly classification, sample-adequate primary frequency gating, and the refreshed live scorecard result.
 - Updated `index.md` - refreshed Last updated summary.
 **Notes:** The venue-correction scorecard now separates distance/location residuals from event-frequency residuals. Frequency z-score league baselines and the primary acceptance gate exclude sample-inadequate venue-seasons, while one-off neutral/outdoor venues remain visible as `insufficient_evidence` diagnostics. The live DB-backed run still passes held-out log-loss and home-ice guardrails, but fails corrected-distance residuals (`max |z| = 4.067`, worst `20092010:Madison Square Garden`) and sample-adequate regular-season training-attempt frequency residuals (`max |z| = 3.572`, worst `20112012:Prudential Center`).
+
+### 2026-05-01 - UPDATE
+
+**Action:** Closed player database row-coverage blocker for RAPM prerequisites
+**Source:** `src/database.py` (`populate_player_game_features`, `validate_player_game_features_quality`, `validate_player_database_readiness`), `src/main.py` (`refresh_player_tables`), `docs/xg_model_roadmap.md`, `docs/xg_model_components/09_handedness_and_effective_angle.md`, `CLAUDE.md`
+**Pages touched:**
+- Updated `wiki/methods/rapm-regularized-adjusted-plus-minus.md` - documented that player identity metadata, player-game stats, and player-game feature row coverage are populated, while RAPM still needs xG predictions and shift/TOI/on-ice exposure data.
+- Updated `index.md` - refreshed Last updated summary.
+**Notes:** Live readiness validation found `ids_missing_and_not_unavailable = 0`, 2,301/2,301 career 50-shot players with handedness populated, 831,573/831,573 event-derived player-game pairs covered by `player_game_stats`, and 831,573/831,573 `player_game_features` rows at the current feature-set version. Rolling TOI/points feature columns remain intentionally null until real TOI and assist inputs are available.
