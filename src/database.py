@@ -47,7 +47,7 @@ WITH pairs AS (
 
 _XG_EVENT_SCHEMA_VERSION = "v5"
 _XG_FEATURE_SCHEMA_VERSION = "v1"
-_SHIFT_SCHEMA_VERSION = "v1"
+_SHIFT_SCHEMA_VERSION = "v2"
 _ON_ICE_SCHEMA_VERSION = "v1"
 _MIN_TRAINING_SEASON = "20092010"
 
@@ -1633,6 +1633,9 @@ def create_shifts_table(conn):
         CREATE TABLE IF NOT EXISTS shifts (
             game_id INTEGER NOT NULL,
             player_id INTEGER NOT NULL,
+            team_id INTEGER,
+            team_side TEXT,
+            position TEXT,
             period INTEGER NOT NULL,
             start_seconds INTEGER NOT NULL,
             end_seconds INTEGER NOT NULL,
@@ -1645,6 +1648,23 @@ def create_shifts_table(conn):
         "CREATE INDEX IF NOT EXISTS idx_shifts_game_period "
         "ON shifts(game_id, period)"
     )
+    conn.commit()
+
+
+def _migrate_shifts_add_context_columns(conn):
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shifts'")
+    if cursor.fetchone() is None:
+        return
+
+    cursor.execute("PRAGMA table_info(shifts)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    if "team_id" not in existing_cols:
+        cursor.execute("ALTER TABLE shifts ADD COLUMN team_id INTEGER")
+    if "team_side" not in existing_cols:
+        cursor.execute("ALTER TABLE shifts ADD COLUMN team_side TEXT")
+    if "position" not in existing_cols:
+        cursor.execute("ALTER TABLE shifts ADD COLUMN position TEXT")
     conn.commit()
 
 
@@ -1673,6 +1693,218 @@ def create_on_ice_intervals_table(conn):
         "ON on_ice_intervals(game_id, period)"
     )
     conn.commit()
+
+
+_SHIFT_INSERT_COLUMNS = (
+    "game_id",
+    "player_id",
+    "team_id",
+    "team_side",
+    "position",
+    "period",
+    "start_seconds",
+    "end_seconds",
+    "shift_schema_version",
+)
+
+_SHIFT_ALLOWED_KEYS = frozenset(_SHIFT_INSERT_COLUMNS)
+
+
+def _record_value(record, column_name):
+    if isinstance(record, dict):
+        return record.get(column_name)
+    return getattr(record, column_name, None)
+
+
+def insert_shift_records(conn, shift_records, commit=True):
+    """Insert normalized shift records without duplicating existing rows."""
+    records = list(shift_records)
+    if not records:
+        return 0
+
+    for record in records:
+        if isinstance(record, dict):
+            bad_keys = set(record.keys()) - _SHIFT_ALLOWED_KEYS
+            if bad_keys:
+                raise ValueError(f"Invalid shift record keys: {bad_keys}")
+
+    cols = ", ".join(_SHIFT_INSERT_COLUMNS)
+    placeholders = ", ".join(["?"] * len(_SHIFT_INSERT_COLUMNS))
+    query = (
+        f"INSERT INTO shifts ({cols}) VALUES ({placeholders}) "
+        "ON CONFLICT(game_id, player_id, period, start_seconds, end_seconds) "
+        "DO UPDATE SET "
+        "team_id = excluded.team_id, "
+        "team_side = excluded.team_side, "
+        "position = excluded.position, "
+        "shift_schema_version = excluded.shift_schema_version"
+    )
+    rows = [
+        tuple(
+            _record_value(record, column_name)
+            if column_name != "shift_schema_version"
+            else (_record_value(record, column_name) or _SHIFT_SCHEMA_VERSION)
+            for column_name in _SHIFT_INSERT_COLUMNS
+        )
+        for record in records
+    ]
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM shifts")
+    before_count = cursor.fetchone()[0]
+    cursor.executemany(query, rows)
+    cursor.execute("SELECT COUNT(*) FROM shifts")
+    inserted = cursor.fetchone()[0] - before_count
+    if commit:
+        conn.commit()
+    return inserted
+
+
+_ON_ICE_INTERVAL_INSERT_COLUMNS = (
+    "game_id",
+    "period",
+    "start_s",
+    "end_s",
+    "home_skaters_json",
+    "away_skaters_json",
+    "home_goalie_player_id",
+    "away_goalie_player_id",
+    "strength_state",
+    "on_ice_schema_version",
+)
+
+
+def replace_game_on_ice_intervals(conn, game_id, intervals, commit=True):
+    """Replace intervalized on-ice rows for one game."""
+    interval_rows = list(intervals)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM on_ice_intervals WHERE game_id = ?", (game_id,))
+
+    if interval_rows:
+        cols = ", ".join(_ON_ICE_INTERVAL_INSERT_COLUMNS)
+        placeholders = ", ".join(["?"] * len(_ON_ICE_INTERVAL_INSERT_COLUMNS))
+        query = f"INSERT INTO on_ice_intervals ({cols}) VALUES ({placeholders})"
+        rows = [
+            tuple(
+                _record_value(interval, column_name)
+                if column_name != "on_ice_schema_version"
+                else (_record_value(interval, column_name) or _ON_ICE_SCHEMA_VERSION)
+                for column_name in _ON_ICE_INTERVAL_INSERT_COLUMNS
+            )
+            for interval in interval_rows
+        ]
+        cursor.executemany(query, rows)
+
+    if commit:
+        conn.commit()
+    return len(interval_rows)
+
+
+def update_shot_event_on_ice_slots(conn, shot_rows, commit=True):
+    """Update shot_events on-ice slot columns from enriched shot rows."""
+    rows_to_update = list(shot_rows)
+    if not rows_to_update:
+        return 0
+
+    set_clause = ", ".join(
+        f"{column_name} = ?" for column_name in _SHOT_EVENTS_ON_ICE_COLUMNS
+    )
+    query = f"UPDATE shot_events SET {set_clause} WHERE shot_event_id = ?"
+    values = [
+        tuple(row.get(column_name) for column_name in _SHOT_EVENTS_ON_ICE_COLUMNS)
+        + (row["shot_event_id"],)
+        for row in rows_to_update
+    ]
+
+    cursor = conn.cursor()
+    cursor.executemany(query, values)
+    updated = cursor.rowcount
+    if commit:
+        conn.commit()
+    return updated
+
+
+def game_has_current_shift_data(conn, game_id):
+    """Return True when shifts and intervals exist at the current versions."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT 1
+           FROM shifts
+           WHERE game_id = ?
+             AND shift_schema_version = ?
+           LIMIT 1""",
+        (game_id, _SHIFT_SCHEMA_VERSION),
+    )
+    if cursor.fetchone() is None:
+        return False
+
+    cursor.execute(
+        """SELECT 1
+           FROM on_ice_intervals
+           WHERE game_id = ?
+             AND on_ice_schema_version = ?
+           LIMIT 1""",
+        (game_id, _ON_ICE_SCHEMA_VERSION),
+    )
+    return cursor.fetchone() is not None
+
+
+def get_shift_backfill_game_ids(conn, limit=None):
+    """Return games with shot events that still need shift population."""
+    cursor = conn.cursor()
+    query = (
+        """SELECT DISTINCT se.game_id
+           FROM shot_events se
+           WHERE NOT EXISTS (
+               SELECT 1
+               FROM shifts sh
+               WHERE sh.game_id = se.game_id
+                 AND sh.shift_schema_version = ?
+           )
+              OR NOT EXISTS (
+               SELECT 1
+               FROM on_ice_intervals oi
+               WHERE oi.game_id = se.game_id
+                 AND oi.on_ice_schema_version = ?
+           )
+           ORDER BY se.game_id"""
+    )
+    params = [_SHIFT_SCHEMA_VERSION, _ON_ICE_SCHEMA_VERSION]
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+    cursor.execute(query, tuple(params))
+    return [row[0] for row in cursor.fetchall()]
+
+
+def load_player_positions(conn, player_ids):
+    """Return player_id -> position for known players."""
+    ids = sorted({player_id for player_id in player_ids if player_id is not None})
+    if not ids:
+        return {}
+
+    placeholders = ", ".join(["?"] * len(ids))
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""SELECT player_id, position
+            FROM players
+            WHERE player_id IN ({placeholders})""",
+        tuple(ids),
+    )
+    return {row[0]: row[1] for row in cursor.fetchall()}
+
+
+def load_game_team_ids(conn, game_id):
+    """Return (home_team_id, away_team_id) for a game, or (None, None)."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT home_team_id, away_team_id FROM games WHERE game_id = ?",
+        (game_id,),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None, None
+    return row[0], row[1]
 
 
 def create_player_team_history_table(conn):
@@ -2138,6 +2370,7 @@ def ensure_xg_schema(conn):
     create_venue_bias_diagnostics_table(conn)
     create_venue_bias_corrections_table(conn)
     create_shifts_table(conn)
+    _migrate_shifts_add_context_columns(conn)
     create_on_ice_intervals_table(conn)
     create_player_team_history_table(conn)
     create_player_absences_table(conn)

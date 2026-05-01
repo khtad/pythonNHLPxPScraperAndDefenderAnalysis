@@ -23,6 +23,10 @@ from database import (create_table, insert_data, create_connection,
                       DATABASE_DIR, DATABASE_PATH)
 from xg_features import extract_shot_events, extract_game_metadata
 from backup import run_backup_cycle_safe
+from shift_population import (
+    format_shift_population_summary,
+    populate_shift_data_for_game,
+)
 
 NHL_FIRST_GAME_DATE = datetime.date(2007, 10, 3)  # earliest available game in NHL API
 
@@ -57,6 +61,9 @@ def _process_game(conn, game_id):
     shots_current = game_has_current_shot_events(conn, game_id)
 
     if raw_present and meta_present and shots_current:
+        shift_result = populate_shift_data_for_game(conn, game_id)
+        if shift_result.games_populated:
+            print(f"  game {game_id}: {format_shift_population_summary(shift_result)}")
         return True
 
     if raw_present:
@@ -116,6 +123,11 @@ def _process_game(conn, game_id):
             print(f"  game {game_id}: inserted {len(shot_events)} shot events")
         else:
             print(f"  game {game_id}: no shot events extracted")
+
+    if game_has_current_shot_events(conn, game_id):
+        shift_result = populate_shift_data_for_game(conn, game_id)
+        if shift_result.games_populated:
+            print(f"  game {game_id}: {format_shift_population_summary(shift_result)}")
 
     return True
 

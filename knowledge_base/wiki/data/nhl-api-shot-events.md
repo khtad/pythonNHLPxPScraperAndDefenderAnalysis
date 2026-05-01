@@ -39,7 +39,7 @@ The table uses schema versioning (`event_schema_version`) to support version-awa
 | `manpower_state` | TEXT | Skater count situation (see [Manpower States](manpower-states.md)) |
 | `seconds_since_faceoff` | INTEGER | Seconds elapsed since the last faceoff in the same period |
 | `faceoff_zone_code` | TEXT | Zone of the last faceoff: "O" (offensive), "D" (defensive), "N" (neutral) |
-| `home_on_ice_*_player_id`, `away_on_ice_*_player_id` | INTEGER | Up to six on-ice player ids per side, used by roster/shift decomposition phases |
+| `home_on_ice_*_player_id`, `away_on_ice_*_player_id` | INTEGER | Up to six on-ice player ids per side, populated from shift-chart intervals when shift data is available |
 | `event_schema_version` | TEXT NOT NULL | Schema version that produced this row (currently "v5") |
 
 **Uniqueness constraint:** `UNIQUE(game_id, event_idx)` — one row per event per game.
@@ -80,7 +80,9 @@ The four event types captured as shot events [1]:
 
 This table is the foundation for all xG modeling work. Every feature engineering step (Phases 1-4) and model training step (Phase 3+) operates on or derives from `shot_events` rows. The schema version system ensures that when feature extraction logic changes (e.g., coordinate normalization improvements, new faceoff recency calculations), all historical data is automatically reprocessed to maintain consistency.
 
-Last verified: 2026-04-30 (schema version v5, `_XG_EVENT_SCHEMA_VERSION` in `src/database.py`; local live database has zero stale training-eligible rows and 1,853,808 rows in the tightened model-training contract).
+Shift-chart population now updates the on-ice slot columns after building `on_ice_intervals`; slots remain NULL for games whose shift-chart payload is missing or has not been backfilled [5].
+
+Last verified: 2026-05-01 (schema version v5, `_XG_EVENT_SCHEMA_VERSION` in `src/database.py`; local live database has zero stale training-eligible rows and 1,853,808 rows in the tightened model-training contract).
 
 ## Sources
 
@@ -88,6 +90,7 @@ Last verified: 2026-04-30 (schema version v5, `_XG_EVENT_SCHEMA_VERSION` in `src
 [2] Schema and validation — `src/database.py` (`create_shot_events_table()`, `validate_shot_events_quality()`, `_XG_EVENT_SCHEMA_VERSION`)
 [3] Shot distance diagnostic — `knowledge_base/raw/project/2026-04-06_shot-distance-diagnostic.md`, `notebooks/shot_distance_diagnostic.ipynb`
 [4] Validation scorecard run — `artifacts/validation_scorecard_latest.md`, `docs/xg_model_roadmap.md`, `scripts/export_validation_scorecard.py`
+[5] Shift population pipeline — `src/shift_population.py` (`populate_shift_data_for_game()`), `src/on_ice_builder.py` (`attach_on_ice_slots_to_shots()`)
 
 ## Related Pages
 
@@ -99,6 +102,7 @@ Last verified: 2026-04-30 (schema version v5, `_XG_EVENT_SCHEMA_VERSION` in `src
 
 ## Revision History
 
+- 2026-05-01 — Updated. Documented shift-chart population of on-ice slot columns.
 - 2026-04-30 — Updated. Documented the tightened model-training loader contract and passing live validation scorecard.
 - 2026-04-28 — Updated. Recorded completed v5 backfill, current validation-scorecard status, and the 11-value shot type enum.
 - 2026-04-28 — Updated. Refreshed schema description to v5, added `shot_event_type` and on-ice slots, and documented the partial v5 coverage blocker for Phase 2.5.3.

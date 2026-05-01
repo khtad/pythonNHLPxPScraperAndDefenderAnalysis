@@ -250,3 +250,13 @@
 - Updated `wiki/methods/rapm-regularized-adjusted-plus-minus.md` - documented that player identity metadata, player-game stats, and player-game feature row coverage are populated, while RAPM still needs xG predictions and shift/TOI/on-ice exposure data.
 - Updated `index.md` - refreshed Last updated summary.
 **Notes:** Live readiness validation found `ids_missing_and_not_unavailable = 0`, 2,301/2,301 career 50-shot players with handedness populated, 831,573/831,573 event-derived player-game pairs covered by `player_game_stats`, and 831,573/831,573 `player_game_features` rows at the current feature-set version. Rolling TOI/points feature columns remain intentionally null until real TOI and assist inputs are available.
+
+### 2026-05-01 - UPDATE
+
+**Action:** Added shift-chart table population pipeline
+**Source:** `src/shifts.py`, `src/on_ice_builder.py`, `src/shift_population.py`, `scripts/backfill_shift_data.py`, `src/database.py` (`shifts`, `on_ice_intervals`, shot-event slot update helpers), `src/main.py`, `docs/shift_level_data_analysis_roadmap.md`, `README.md`
+**Pages touched:**
+- Updated `wiki/data/nhl-api-endpoints.md` - documented the shift charts endpoint, consumed fields, and project population flow.
+- Updated `wiki/data/nhl-api-shot-events.md` - documented that on-ice slot columns are populated from shift-chart intervals when available.
+- Updated `index.md` - refreshed Last updated summary.
+**Notes:** The new pipeline normalizes realistic NHL shift-chart payload keys, persists `shifts` and `on_ice_intervals` idempotently, updates `shot_events.home_on_ice_*` / `away_on_ice_*`, exposes `scripts/backfill_shift_data.py --all` for historical population, and reuses the same per-game function from `main.py` for newly processed games. QoT/QoC and RAPM output tables remain later-phase work.

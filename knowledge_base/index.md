@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-05-01 (Closed player database row-coverage blocker and refreshed RAPM prerequisites)
+> Last updated: 2026-05-01 (Added shift-chart population pipeline and refreshed on-ice data-source references)
 
 ## Concepts
 

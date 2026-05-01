@@ -27,6 +27,57 @@ def test_parse_shift_rows_normalizes_clock_strings():
     ]
 
 
+def test_parse_shift_rows_normalizes_nhl_shift_chart_payload():
+    raw_rows = [
+        {
+            "playerId": "8478402",
+            "teamId": "22",
+            "period": "1",
+            "startTime": "00:10",
+            "endTime": "00:35",
+            "positionCode": "c",
+        },
+        {
+            "playerId": "8479977",
+            "teamId": "10",
+            "period": "1",
+            "startTime": "00:15",
+            "duration": "00:25",
+        },
+    ]
+
+    records = parse_shift_rows(
+        game_id=2025020001,
+        raw_rows=raw_rows,
+        home_team_id=22,
+        away_team_id=10,
+        player_positions={8479977: "g"},
+    )
+
+    assert records == [
+        ShiftRecord(
+            game_id=2025020001,
+            player_id=8478402,
+            team_id=22,
+            team_side="home",
+            position="C",
+            period=1,
+            start_seconds=10,
+            end_seconds=35,
+        ),
+        ShiftRecord(
+            game_id=2025020001,
+            player_id=8479977,
+            team_id=10,
+            team_side="away",
+            position="G",
+            period=1,
+            start_seconds=15,
+            end_seconds=40,
+        ),
+    ]
+
+
 def test_validate_shift_records_reports_invalid_rows():
     records = [
         ShiftRecord(game_id=1, player_id=10, period=1, start_seconds=1, end_seconds=2),
