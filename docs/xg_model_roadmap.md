@@ -100,14 +100,14 @@ Status here is verified against the live database, not just self-reported from p
 |-------|--------|----------|
 | Phase 0 — contracts, schema, reproducibility | **Complete** | `_XG_EVENT_SCHEMA_VERSION = "v5"` (`src/database.py`); live validation run found all 2,122,963 `shot_events` rows at v5 and zero stale training-eligible rows; version-aware backfill (`game_has_current_shot_events`, `delete_game_shot_events`) present; `validate_shot_events_quality` covers enums/ranges/duplicates. |
 | Phase 1 — event/state foundation | **Complete** | `normalize_coordinates`, distance/angle, 11-type shot taxonomy, score/manpower/time classifiers in `src/xg_features.py`. Pre-2020 negative-x rate is now 0.0 (was ~50% at v2). Pre-event score tracker `_track_score` prevents post-goal leakage. |
-| Phase 2 — context feature engineering | **Complete (with two criteria formally deferred)** | `game_context` populated (26,343 rows at v1) with rest/travel/timezone features; `validate_game_context_quality` added. Faceoff decay bins implemented. `populate_venue_diagnostics` is wired into the scraper pipeline via `finalize_season_diagnostics` and runs per season. VIF review done on live data (see below). The two remaining acceptance criteria — held-out faceoff-decay validation and zone-start change-on-the-fly inference — are formally deferred to their gating dependencies: Phase 2.5.2 (`src/validation.py` helpers) and a future shifts-ingestion branch, respectively. |
-| Phase 2.5 — rigor foundation (new, gates Phase 3) | **In progress** | 2.5.1 and 2.5.2 are implemented in `src/` with tests; live player readiness now passes with 4,694 `players`, 831,573 `player_game_stats` rows, and 831,573 current-version `player_game_features` rows. 2.5.3 now has a live v5 validation scorecard artifact that passes all 8 gates; 2.5.4 now has an initial correction table (`venue_bias_corrections`), shrinkage-based distance adjustment parameters wired into `finalize_season_diagnostics`, event-frequency scorekeeper diagnostics, a JSON scorecard exporter, and a DB-backed live runner. The live venue-correction scorecard passes held-out log-loss and home-ice guardrail gates but fails both distance/location and event-frequency residual z-score gates, so the correction is not accepted for production xG training yet. 2.5.5 has a recorded decision and an enforced loader guard (`load_training_shot_events`) excluding pre-2009 seasons and non-training shot rows. |
+| Phase 2 — context feature engineering | **Complete (with two criteria formally deferred)** | `game_context` populated (26,372 rows at v1, verified 2026-05-01) with rest/travel/timezone features; `validate_game_context_quality` added. Faceoff decay bins implemented. `populate_venue_diagnostics` is wired into the scraper pipeline via `finalize_season_diagnostics` and runs per season. VIF review done on live data (see below). The two remaining acceptance criteria are now split by dependency: held-out faceoff-decay validation can proceed using the promoted `src/validation.py` helpers, while zone-start change-on-the-fly inference remains blocked on populated shift/on-ice data. |
+| Phase 2.5 — rigor foundation (new, gates feature inclusion) | **In progress (selected Phase 3 baseline unblocked)** | 2.5.1 and 2.5.2 are implemented in `src/` with tests; live player readiness now passes with 4,694 `players`, 831,573 `player_game_stats` rows, and 831,573 current-version `player_game_features` rows. 2.5.3 now has a live v5 validation scorecard artifact that passes all 8 gates; 2.5.4 now has populated diagnostics/corrections (653 `venue_bias_diagnostics` rows and 532 `venue_bias_corrections` rows), shrinkage-based distance adjustment parameters wired into `finalize_season_diagnostics`, event-frequency scorekeeper diagnostics, a JSON scorecard exporter, and a DB-backed live runner. The live venue-correction scorecard passes held-out log-loss and home-ice guardrail gates but fails both distance/location and event-frequency residual z-score gates, so the correction is not accepted for production xG training yet. 2.5.5 has a recorded decision and an enforced loader guard (`load_training_shot_events`) excluding pre-2009 seasons and non-training shot rows. |
 | Phase 3 — baseline xG model | **Ready to start** | No training code in `src/`. The live validation scorecard now passes 8/8 gates with a selected calibrated logistic model (`artifacts/validation_scorecard_latest.md`), so Phase 3 model implementation can proceed while keeping unresolved features excluded. |
 | Phase 4 — enhanced xG model | **Not started** | Depends on Phase 3. |
-| Phase 5 — RAPM on xG | **Blocked on downstream prerequisites** | Player identity and player-game foundations are populated and validated. Remaining blockers are validated xG predictions with uncertainty plus future shift/TOI/on-ice data needed for a true RAPM design matrix. |
+| Phase 5 — RAPM on xG | **Blocked on downstream prerequisites** | Player identity and player-game foundations are populated and validated. Shift/on-ice/RAPM schemas and Phase 1 shift utilities exist, but the live DB still has 0 `shifts`, 0 `on_ice_intervals`, 0 `shift_quality_features`, and 0 `rapm_player_ratings` rows. Remaining blockers are validated xG predictions with uncertainty plus populated shift/TOI/on-ice exposure data for a true RAPM design matrix. |
 | Phase 6–7 — team strength, hardening | **Not started** | Depends on Phase 3–5. |
 
-### Critical blockers (must close before Phase 3 modeling is meaningful)
+### Open blockers and exclusions for Phase 3+
 
 1. **Player database blocker is closed.** Live validation on 2026-05-01 found `ids_missing_and_not_unavailable = 0`, 2,301/2,301 players with ≥ 50 career shots have `shoots_catches`, `player_game_stats` covers all 831,573 event-derived player-game pairs, and `player_game_features` now has 831,573 current-version rows with zero missing, duplicate, stale-version, or unsupported-value rows. The remaining RAPM data gap is shift/TOI/on-ice exposure and xG prediction/residual inputs, not player identity metadata.
 2. **2007–2008 shot-distance anomaly.** Average `distance_to_goal` for 2007–08 is ~19–20 units vs ~34 for 2009+. `wrap-around` and `deflected` shots have `NULL` distances in 2007–08 (coordinates absent in that era). **Phase 2.5.5 decision:** exclude pre-2009 seasons from model-training inputs; enforced by `load_training_shot_events` and test coverage.
@@ -198,15 +198,15 @@ Deliverables:
 
 Acceptance criteria:
 - ✅ `game_context` populated for every game with a `shot_events` row; null rates on rest/travel/timezone fields < 1%. **Met (modulo 0.07 pp overage on travel/timezone, tracked under 2.5.5).** Validator: `validate_game_context_quality` in `src/database.py`.
-- ⏸ Faceoff-decay bin boundaries validated on held-out data. **Deferred to Phase 2.5.2** — requires `src/validation.py` helpers (`run_temporal_cv`, `bootstrap_goal_rate_ci`) which currently live only in the notebook.
-- ⏸ Zone-start features carry a documented inference accuracy estimate. **Deferred to shifts ingestion** — proper change-on-the-fly inference needs a populated `shifts` table. The raw `faceoff_zone_code` + `seconds_since_faceoff` captured today is a usable-but-weak proxy; the richer feature follows shift data.
+- ⏸ Faceoff-decay bin boundaries validated on held-out data. **Deferred to Phase 3 feature-inclusion work** — the validation prerequisite is now closed because `run_temporal_cv`, `bootstrap_goal_rate_ci`, and related helpers live in `src/validation.py`.
+- ⏸ Zone-start features carry a documented inference accuracy estimate. **Deferred to shift persistence/backfill** — proper change-on-the-fly inference needs populated `shifts` and `on_ice_intervals` tables. The raw `faceoff_zone_code` + `seconds_since_faceoff` captured today is a usable-but-weak proxy; the richer feature follows shift data.
 - ✅ Multicollinearity review across rest/travel/score-state features; VIF < 5 for each. **Met**, with the finding that `rest_advantage` is a perfect linear combination of `home_rest_days − away_rest_days` and must be excluded from the Phase 3 design matrix. Remaining six features: max VIF = 2.76. See "Phase 2 multicollinearity review" block above.
 - ✅ Venue bias diagnostics populated per season via `finalize_season_diagnostics` (`src/main.py`), running after the scraper/backfill loop.
 - ❌ Venue correction layer has live DB-backed acceptance results but is not accepted for production xG training yet: held-out log-loss and home-ice guardrail pass, while distance/location and event-frequency residual z-score gates fail under Phase 2.5.4.
 
-## Phase 2.5: Rigor Foundation (gates Phase 3)
+## Phase 2.5: Rigor Foundation (gates feature inclusion)
 
-Five deliverables, each gated by a quantitative acceptance criterion. This phase is new and exists because Phase 3 training against the current codebase would produce an under-specified model with empty player metadata, unvalidated evaluation code, and no venue correction — all of which would silently degrade the downstream RAPM.
+Five deliverables, each gated by a quantitative acceptance criterion. This phase was added to prevent Phase 3 training from silently using incomplete player dimensions, notebook-only evaluation helpers, or unaccepted venue corrections. Current state: player metadata, validation helpers, the selected-feature validation scorecard, and the pre-2009 exclusion contract are closed; venue correction remains implemented but unaccepted and must stay excluded from baseline training until its gates pass.
 
 ### 2.5.1 Player metadata pipeline
 
@@ -227,9 +227,9 @@ Acceptance:
 - Refactor the notebook to import from `src/validation.py` (no duplicated logic).
 
 Acceptance:
-- All helpers importable from `src/`.
-- `pytest -q` passes with the new tests.
-- No duplicated validation logic remains in the notebook.
+- ✅ All helpers importable from `src/validation.py`.
+- ✅ `tests/test_validation.py` covers the promoted helpers and calibration/venue-scorecard gates.
+- ✅ No duplicated helper definitions remain in `notebooks/model_validation_framework.ipynb`.
 
 ### 2.5.3 Run validation framework end-to-end on live v5 data
 
@@ -245,7 +245,7 @@ Acceptance:
 
 ### 2.5.4 Venue bias correction implementation
 
-- Populate `venue_bias_diagnostics` for all venue-seasons with ≥ `MIN_SHOTS_PER_CELL` shots (currently 0 rows).
+- Populate `venue_bias_diagnostics` for all venue-seasons with ≥ `MIN_SHOTS_PER_CELL` shots. **Current live state:** 653 diagnostic rows and 532 correction rows exist; correction acceptance is still blocked by the residual gates below.
 - Implement correction. Two approaches are documented in `knowledge_base/wiki/concepts/venue-scorekeeper-bias.md`:
   - **CDF-matching (Schuckers):** quantile-map each venue's shot-distance distribution to the league distribution.
   - **Hierarchical venue intercepts:** add a partially-pooled venue-season intercept to the xG model, shrinking toward a league prior.
