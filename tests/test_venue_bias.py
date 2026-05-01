@@ -58,6 +58,24 @@ def test_event_frequency_diagnostics_compute_rates_and_z_scores():
     assert by_venue["Arena C"]["sample_adequate"] is True
 
 
+def test_event_frequency_baseline_excludes_sample_inadequate_venues():
+    rows = []
+    for idx in range(20):
+        rows.append(_game_row("Arena A", idx, idx, 10, 4))
+        rows.append(_game_row("Arena B", 100 + idx, idx, 20, 8))
+    rows.append(_game_row("Neutral Site", 999, 999, 100, 40))
+
+    diagnostics = compute_event_frequency_diagnostics(rows)
+    by_venue = {row["venue_name"]: row for row in diagnostics}
+
+    assert by_venue["Neutral Site"]["sample_adequate"] is False
+    assert by_venue["Arena A"]["league_events_per_game_mean"] == pytest.approx(15.0)
+    assert by_venue["Arena A"]["league_events_per_game_stddev"] == pytest.approx(5.0)
+    assert by_venue["Arena A"]["frequency_z_score"] == pytest.approx(-1.0)
+    assert by_venue["Arena B"]["frequency_z_score"] == pytest.approx(1.0)
+    assert by_venue["Neutral Site"]["frequency_z_score"] == pytest.approx(17.0)
+
+
 def test_event_frequency_diagnostics_keep_scope_and_group_separate():
     rows = [
         _game_row(

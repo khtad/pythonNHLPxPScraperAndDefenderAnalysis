@@ -112,7 +112,7 @@ def compute_event_frequency_diagnostics(
 
     baselines: dict[tuple[str, str, str], list[float]] = defaultdict(list)
     for row in diagnostics:
-        if np.isfinite(row["events_per_game"]):
+        if row["sample_adequate"] and np.isfinite(row["events_per_game"]):
             baselines[
                 (row["game_type_scope"], row["event_group"], row["season"])
             ].append(row["events_per_game"])

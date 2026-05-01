@@ -26,7 +26,7 @@ Estimate and correct rink/venue scorer effects that distort event recording and 
   all-attempt frequencies are diagnostic only. The 2026-05-01 live v5 refresh
   passes held-out log-loss and home-ice guardrails but fails the residual
   corrected-distance z-score gate (`max |z| = 4.067`) and event-frequency
-  residual gate (`max |z| = 3.453`), so the current correction remains
+  residual gate (`max |z| = 3.572`), so the current correction remains
   exploratory rather than a production xG training feature.
 
 ## Extension points
