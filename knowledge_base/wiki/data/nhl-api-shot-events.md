@@ -3,7 +3,7 @@
 > Canonical schema for individual shot events extracted from NHL play-by-play data, with normalized coordinates, game-state context, and faceoff recency.
 
 <!-- data-version: v5 -->
-<!-- data-revalidate: After the remaining v4 rows are backfilled or safely promoted to v5, update current-schema coverage counts and remove the Phase 2.5.3 blocker note if resolved. -->
+<!-- data-revalidate: Re-run validation-scorecard export after shot-event contract changes or future schema bumps. -->
 
 ## Overview
 
@@ -26,7 +26,7 @@ The table uses schema versioning (`event_schema_version`) to support version-awa
 | `period` | INTEGER NOT NULL | Period number |
 | `time_in_period` | TEXT NOT NULL | "MM:SS" elapsed time in period |
 | `time_remaining_seconds` | INTEGER NOT NULL | Seconds remaining in the period |
-| `shot_type` | TEXT NOT NULL | One of 10 valid types (see [Shot Type Taxonomy](shot-type-taxonomy.md)) |
+| `shot_type` | TEXT NOT NULL | One of 11 valid types (see [Shot Type Taxonomy](shot-type-taxonomy.md)) |
 | `x_coord` | REAL | Normalized x-coordinate (feet). NULL if API coordinates missing. |
 | `y_coord` | REAL | Normalized y-coordinate (feet). NULL if API coordinates missing. |
 | `distance_to_goal` | REAL | Euclidean distance to goal (feet). See [Coordinate System](coordinate-system-and-normalization.md). |
@@ -58,7 +58,7 @@ The four event types captured as shot events [1]:
 
 `validate_shot_events_quality()` checks [2]:
 - `shot_event_type` must be in `VALID_SHOT_EVENT_TYPES` (4 values) or NULL
-- `shot_type` must be in `VALID_SHOT_TYPES` (10 values)
+- `shot_type` must be in `VALID_SHOT_TYPES` (11 values)
 - `manpower_state` must be in `VALID_MANPOWER_STATES` (15 values) or NULL
 - `score_state` must be in `VALID_SCORE_STATES` (7 values) or NULL
 - `x_coord` must be in [-100.0, 100.0] or NULL
@@ -73,20 +73,21 @@ The four event types captured as shot events [1]:
 - **Missing `homeTeamDefendingSide` (pre-2020):** The NHL API does not provide this field for games before the 2019-2020 season. Schema v2 stored raw coordinates unchanged, resulting in ~50% of pre-2020 shots having wrong coordinates (negative x, ~150 ft average distance). Schema v3 adds a sign-based fallback heuristic that corrects ~96% of affected shots. See [Coordinate System and Normalization](coordinate-system-and-normalization.md) for full details [1][3].
 - **Faceoff tracking reset per period:** `seconds_since_faceoff` is NULL for shots before the first faceoff in a period [1].
 - **Historical backfill completeness bug:** The `_game_is_complete()` check once used `game_has_shot_events()` (any version) rather than `game_has_current_shot_events()` (current version), preventing stale rows from being detected. Fixed 2026-04-06 [3].
-- **Partial v5 coverage in the local live database:** As of 2026-04-28, conservative raw-table reconstruction promoted 1,574,298 rows from v4 to v5, but 546,702 rows remain at v4, including 507,543 otherwise training-eligible post-2009 complete-geometry rows. Phase 2.5.3 validation scorecard export is blocked until those rows are repaired or a validated offline matcher covers them [4].
+- **Model-training contract:** `load_training_shot_events()` is the canonical DB-backed training loader. As of 2026-04-30 it requires schema v5, season >= 20092010, NHL game type 02 or 03, no regular-season period >= 5 shootouts, non-blocked shot-event types only, non-null distance/angle/shot type/manpower/score state, and consistency between `shot_event_type` and `is_goal` [2][4].
+- **Validation scorecard status:** As of 2026-04-30, the local live database has 2,122,963 `shot_events` rows at schema v5 and zero stale training-eligible rows. The tightened training contract yields 1,853,808 model-training rows. `scripts/export_validation_scorecard.py` exports a live scorecard that now passes all 8 gates for the selected calibrated model [4].
 
 ## Relevance to This Project
 
 This table is the foundation for all xG modeling work. Every feature engineering step (Phases 1-4) and model training step (Phase 3+) operates on or derives from `shot_events` rows. The schema version system ensures that when feature extraction logic changes (e.g., coordinate normalization improvements, new faceoff recency calculations), all historical data is automatically reprocessed to maintain consistency.
 
-Last verified: 2026-04-28 (schema version v5, `_XG_EVENT_SCHEMA_VERSION` in `src/database.py`). Note: the local live database still contains stale v4 rows that block the Phase 2.5.3 validation scorecard export [4].
+Last verified: 2026-04-30 (schema version v5, `_XG_EVENT_SCHEMA_VERSION` in `src/database.py`; local live database has zero stale training-eligible rows and 1,853,808 rows in the tightened model-training contract).
 
 ## Sources
 
 [1] Shot event extraction — `src/xg_features.py` (`extract_shot_events()`, `SHOT_EVENT_TYPE_KEYS`, `normalize_coordinates()`)
 [2] Schema and validation — `src/database.py` (`create_shot_events_table()`, `validate_shot_events_quality()`, `_XG_EVENT_SCHEMA_VERSION`)
 [3] Shot distance diagnostic — `knowledge_base/raw/project/2026-04-06_shot-distance-diagnostic.md`, `notebooks/shot_distance_diagnostic.ipynb`
-[4] Validation scorecard readiness — `artifacts/validation_scorecard_latest.md`, `docs/xg_model_roadmap.md`, `scripts/export_validation_scorecard.py`
+[4] Validation scorecard run — `artifacts/validation_scorecard_latest.md`, `docs/xg_model_roadmap.md`, `scripts/export_validation_scorecard.py`
 
 ## Related Pages
 
@@ -98,6 +99,8 @@ Last verified: 2026-04-28 (schema version v5, `_XG_EVENT_SCHEMA_VERSION` in `src
 
 ## Revision History
 
+- 2026-04-30 — Updated. Documented the tightened model-training loader contract and passing live validation scorecard.
+- 2026-04-28 — Updated. Recorded completed v5 backfill, current validation-scorecard status, and the 11-value shot type enum.
 - 2026-04-28 — Updated. Refreshed schema description to v5, added `shot_event_type` and on-ice slots, and documented the partial v5 coverage blocker for Phase 2.5.3.
 - 2026-04-05 — Created. Initial compilation from src/xg_features.py and src/database.py.
 - 2026-04-06 — Updated. Documented v2 normalization bug, backfill completeness bug fix, and link to coordinate system article. Added source [3]. Fixed cross-references to score states and manpower states (now data articles, not concept articles). Added NHL API Endpoints link.

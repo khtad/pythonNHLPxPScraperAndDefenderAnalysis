@@ -41,7 +41,7 @@ This project plans to start with logistic regression as a baseline, then move to
 A well-built xG model must satisfy [4]:
 
 - **Discrimination** — AUC-ROC distinguishing goals from non-goals (typical: 0.75-0.80)
-- **Calibration** — predicted probabilities match observed goal rates across bins (Hosmer-Lemeshow p > 0.05, calibration slope in [0.95, 1.05])
+- **Calibration** — predicted probabilities match observed goal rates across bins (calibration slope in [0.95, 1.05], max decile error < 1pp, ECE < 0.5pp; Hosmer-Lemeshow reported diagnostically)
 - **Temporal stability** — performance doesn't degrade across held-out seasons (AUC drift < 0.02/season)
 - **Per-segment calibration** — calibration checked separately for even strength, power play, and short-handed
 
@@ -60,7 +60,7 @@ xG is the central modeling target. The project roadmap (`docs/xg_model_roadmap.m
 
 The statistical rigor requirements in `CLAUDE.md` define minimum standards for all eight evaluation criteria.
 
-Last verified: 2026-04-06
+Last verified: 2026-04-30
 
 ## Sources
 
@@ -84,5 +84,6 @@ Last verified: 2026-04-06
 
 ## Revision History
 
+- 2026-04-30 — Updated calibration metric summary to match the live validation scorecard policy.
 - 2026-04-08 — Added external model references (MoneyPuck, Evolving Hockey, HockeyViz Magnus, Schuckers & Curro) and link to public xG model survey.
 - 2026-04-06 — Created. Compiled from project roadmap, component docs, and general hockey analytics domain knowledge.

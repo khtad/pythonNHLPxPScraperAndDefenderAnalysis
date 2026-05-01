@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-04-28 (Added KB preflight guardrail, refreshed shot-event schema status, and added Phase 2.5.4 venue-correction validation scorecard harness)
+> Last updated: 2026-04-30 (Recorded scorecard remediation, calibration-policy update, and tightened training contract)
 
 ## Concepts
 
@@ -15,7 +15,7 @@
 ## Methods
 
 - [Temporal Cross-Validation](wiki/methods/temporal-cross-validation.md) — Season-block CV for hockey data: why random splits leak future information, and how to implement forward-chaining temporal CV.
-- [Calibration Analysis](wiki/methods/calibration-analysis.md) — Reliability diagrams, Hosmer-Lemeshow goodness-of-fit, and calibration slope/intercept for xG probability verification.
+- [Calibration Analysis](wiki/methods/calibration-analysis.md) — Reliability diagrams, practical calibration error gates, Hosmer-Lemeshow diagnostics, and calibration slope/intercept for xG probability verification.
 - [Bootstrapping and Confidence Intervals](wiki/methods/bootstrapping-confidence-intervals.md) — Bootstrap CIs for goal rates, Wilson intervals, and sample size adequacy checks at ~8% base rate.
 - [RAPM (Regularized Adjusted Plus-Minus)](wiki/methods/rapm-regularized-adjusted-plus-minus.md) — Ridge/elastic-net regression to isolate individual player impact from on-ice context using xG residuals.
 - [Effect Size Measures](wiki/methods/effect-size-measures.md) — Cohen's h/d for practical vs statistical significance, with decision rules for this project.
@@ -25,7 +25,7 @@
 
 - [NHL API Shot Events](wiki/data/nhl-api-shot-events.md) — Canonical schema for individual shot events with normalized coordinates, game-state context, and faceoff recency.
 - [Coordinate System and Normalization](wiki/data/coordinate-system-and-normalization.md) — NHL rink coordinate conventions, normalization toward +x, and known data gaps by era.
-- [Shot Type Taxonomy](wiki/data/shot-type-taxonomy.md) — The 10 recognized shot types, their frequency distribution, and relevance to xG modeling.
+- [Shot Type Taxonomy](wiki/data/shot-type-taxonomy.md) — The 11 recognized shot types, their frequency distribution, and relevance to xG modeling.
 - [Manpower States](wiki/data/manpower-states.md) — The 15 valid skater-count situations parsed from NHL API situation codes.
 - [Score States](wiki/data/score-states.md) — The 7 score-differential buckets and their behavioral effects on shot volume and quality.
 - [NHL API Endpoints](wiki/data/nhl-api-endpoints.md) — Schedule, play-by-play, and player-landing endpoints: response structure, rate limiting, and field availability by era.

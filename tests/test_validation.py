@@ -18,15 +18,20 @@ from validation import (
     HOSMER_LEMESHOW_ALPHA,
     MIN_SHOTS_PER_CELL,
     MIN_TRAIN_SEASONS,
+    EXPECTED_CALIBRATION_ERROR_TARGET,
+    MAX_DECILE_CALIBRATION_ERROR,
     VENUE_CORRECTION_MAX_ABS_RESIDUAL_Z_SCORE,
     VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL,
     bootstrap_goal_rate_ci,
     calibration_slope_intercept,
     cohens_h,
+    evaluate_leakage_audit,
     evaluate_venue_correction_holdout,
     evaluate_venue_correction_scorecard,
     hosmer_lemeshow_test,
+    practical_calibration_metrics,
     run_temporal_cv,
+    run_temporal_cv_with_prior_season_calibration,
 )
 
 
@@ -185,6 +190,38 @@ def test_calibration_slope_detects_overconfident_predictions():
 
 
 # --------------------------------------------------------------------------
+# practical_calibration_metrics
+# --------------------------------------------------------------------------
+
+
+def test_practical_calibration_metrics_returns_known_bin_errors():
+    y_true = np.array([0, 0, 1, 1])
+    y_prob = np.array([0.1, 0.2, 0.8, 0.9])
+
+    result = practical_calibration_metrics(y_true, y_prob, n_bins=2)
+
+    assert result["max_bin_calibration_error"] == pytest.approx(0.15)
+    assert result["expected_calibration_error"] == pytest.approx(0.15)
+    assert result["bins"][0]["n"] == 2
+    assert result["bins"][0]["observed_rate"] == pytest.approx(0.0)
+    assert result["bins"][0]["predicted_rate"] == pytest.approx(0.15)
+    assert result["bins"][1]["observed_rate"] == pytest.approx(1.0)
+    assert result["bins"][1]["predicted_rate"] == pytest.approx(0.85)
+
+
+def test_practical_calibration_thresholds_are_documented_values():
+    assert MAX_DECILE_CALIBRATION_ERROR == 0.01
+    assert EXPECTED_CALIBRATION_ERROR_TARGET == 0.005
+
+
+def test_practical_calibration_metrics_rejects_invalid_inputs():
+    with pytest.raises(ValueError, match="equal length"):
+        practical_calibration_metrics(np.array([1, 0]), np.array([0.4]))
+    with pytest.raises(ValueError, match="at least one row"):
+        practical_calibration_metrics(np.array([]), np.array([]))
+
+
+# --------------------------------------------------------------------------
 # run_temporal_cv
 # --------------------------------------------------------------------------
 
@@ -271,6 +308,142 @@ def test_run_temporal_cv_respects_min_train_parameter():
         X, y, row_seasons_arr, unique_seasons, min_train=2
     )
     assert [r["test_season"] for r in results] == list(unique_seasons[2:])
+
+
+def test_prior_season_calibration_cv_uses_train_calibration_test_order():
+    X, y, row_seasons_arr, unique_seasons = _build_temporal_fixture(seed=17)
+
+    results = run_temporal_cv_with_prior_season_calibration(
+        X, y, row_seasons_arr, unique_seasons
+    )
+
+    assert [r["test_season"] for r in results] == list(
+        unique_seasons[MIN_TRAIN_SEASONS + 1 :]
+    )
+    for fold_idx, result in enumerate(
+        results, start=MIN_TRAIN_SEASONS + 1
+    ):
+        expected_calibration = unique_seasons[fold_idx - 1]
+        expected_test = unique_seasons[fold_idx]
+        expected_train_rows = sum(
+            int((row_seasons_arr == season).sum())
+            for season in unique_seasons[: fold_idx - 1]
+        )
+        assert result["calibration_season"] == expected_calibration
+        assert result["test_season"] == expected_test
+        assert result["n_train"] == expected_train_rows
+        assert result["n_calibration"] == int(
+            (row_seasons_arr == expected_calibration).sum()
+        )
+
+
+def test_prior_season_calibration_cv_does_not_use_test_rows_for_calibration():
+    X, y, row_seasons_arr, unique_seasons = _build_temporal_fixture(seed=23)
+    test_season = unique_seasons[-1]
+
+    leak_col = np.zeros(len(y))
+    leak_mask = row_seasons_arr == test_season
+    leak_col[leak_mask] = y[leak_mask] * 10.0
+    X_with_test_only_signal = np.column_stack([X, leak_col])
+
+    results = run_temporal_cv_with_prior_season_calibration(
+        X_with_test_only_signal, y, row_seasons_arr, unique_seasons
+    )
+    last_fold = [r for r in results if r["test_season"] == test_season][0]
+
+    assert last_fold["auc_roc"] < 0.95
+
+
+# --------------------------------------------------------------------------
+# evaluate_leakage_audit
+# --------------------------------------------------------------------------
+
+
+def test_leakage_audit_counts_only_selected_blockers():
+    audit_rows = [
+        {
+            "feature": "distance_to_goal",
+            "available_at_shot_time": "YES",
+            "post_shot_information": "NO",
+            "confounder_risk": "LOW",
+        },
+        {
+            "feature": "manpower_state",
+            "available_at_shot_time": "YES",
+            "post_shot_information": "NO",
+            "confounder_risk": "LOW",
+        },
+        {
+            "feature": "faceoff_zone_code",
+            "available_at_shot_time": "AMBIGUOUS",
+            "post_shot_information": "NO",
+            "confounder_risk": "MEDIUM",
+        },
+        {
+            "feature": "home_rest_days",
+            "available_at_shot_time": "YES",
+            "post_shot_information": "NO",
+            "confounder_risk": "HIGH",
+        },
+        {
+            "feature": "period",
+            "available_at_shot_time": "YES",
+            "post_shot_information": "NO",
+            "confounder_risk": "LOW",
+        },
+        {
+            "feature": "is_goal",
+            "available_at_shot_time": "TARGET",
+            "post_shot_information": "N/A",
+            "confounder_risk": "N/A",
+        },
+    ]
+
+    result = evaluate_leakage_audit(
+        audit_rows,
+        selected_features={"distance_to_goal", "manpower_state"},
+    )
+
+    assert result["pass"] is True
+    assert result["blocking_features"] == []
+    assert set(result["excluded_pending_features"]) == {
+        "faceoff_zone_code",
+        "home_rest_days",
+    }
+    statuses = {
+        row["feature"]: row["selection_status"]
+        for row in result["annotated_rows"]
+    }
+    assert statuses["distance_to_goal"] == "selected"
+    assert statuses["manpower_state"] == "selected"
+    assert statuses["faceoff_zone_code"] == "excluded_pending"
+    assert statuses["home_rest_days"] == "excluded_pending"
+    assert statuses["period"] == "excluded_clear"
+    assert statuses["is_goal"] == "target_not_feature"
+
+
+def test_leakage_audit_blocks_selected_high_risk_features():
+    audit_rows = [
+        {
+            "feature": "home_rest_days",
+            "available_at_shot_time": "YES",
+            "post_shot_information": "NO",
+            "confounder_risk": "HIGH",
+        },
+    ]
+
+    result = evaluate_leakage_audit(
+        audit_rows,
+        selected_features={"home_rest_days"},
+    )
+
+    assert result["pass"] is False
+    assert result["blocking_features"] == ["home_rest_days"]
+
+
+def test_leakage_audit_rejects_missing_selected_rows():
+    with pytest.raises(ValueError, match="missing leakage-audit"):
+        evaluate_leakage_audit([], selected_features={"distance_to_goal"})
 
 
 # --------------------------------------------------------------------------

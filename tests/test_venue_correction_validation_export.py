@@ -51,7 +51,7 @@ def test_format_scorecard_includes_gate_summary():
     assert "Held-out log loss non-worse" in text
     assert "Home-ice over-correction guardrail" in text
     assert "Residual venue z-scores" in text
-    assert "max |z| = 1.800" in text
+    assert "max abs(z) = 1.800" in text
     assert "Overall pass: PASS" in text
     assert "Arena B" in text
 

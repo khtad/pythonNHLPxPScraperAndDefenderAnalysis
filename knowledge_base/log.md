@@ -199,4 +199,36 @@
 **Source:** `scripts/export_validation_scorecard.py`, `scripts/export_venue_correction_validation.py`
 **Pages touched:**
 - None - operational script verbosity only; no domain wiki article claims changed.
-**Notes:** The validation scorecard exporter now prints stage timestamps, schema-coverage summaries, streamed notebook execution output, and periodic notebook-execution heartbeats; it also terminates or kills the notebook child process if the exporter is interrupted. The venue-correction exporter now prints payload, gate, and artifact-write progress.
+**Notes:** The validation scorecard exporter now prints stage timestamps, schema-coverage summaries, streamed notebook execution output, and periodic notebook-execution heartbeats; it also terminates or kills the notebook child process if the exporter is interrupted. On Windows, it launches `nbconvert` through a Python entrypoint that sets `WindowsSelectorEventLoopPolicy` before importing nbconvert, suppressing the harmless ZMQ Proactor-loop warning without hiding other warnings. The venue-correction exporter now prints payload, gate, and artifact-write progress.
+
+### 2026-04-28 - UPDATE
+
+**Action:** Recorded live validation-scorecard run and refreshed shot-type taxonomy coverage
+**Source:** `src/database.py` (`VALID_SHOT_TYPES`), `notebooks/model_validation_framework.ipynb`, `artifacts/validation_scorecard_latest.md`, `docs/xg_model_roadmap.md`
+**Pages touched:**
+- Updated `wiki/data/shot-type-taxonomy.md` - refreshed v5 counts and documented the 11 accepted shot types, including `deflected` and `between-legs`.
+- Updated `wiki/data/nhl-api-shot-events.md` - recorded completed v5 backfill, zero stale training-eligible rows, and the live validation-scorecard status.
+- Updated `index.md` - refreshed Last updated summary and the shot-type taxonomy entry.
+**Notes:** The validation scorecard now runs against live v5 data and produces concrete results. Phase 3 remains blocked by scorecard failures, but the stale-schema execution blocker is resolved.
+
+### 2026-04-28 - UPDATE
+
+**Action:** Recorded live DB-backed venue-correction scorecard result
+**Source:** `scripts/export_venue_correction_validation_from_db.py`, `artifacts/venue_correction_validation_latest.md`, `docs/xg_model_roadmap.md`, `docs/xg_model_components/04_scorekeeper_bias.md`
+**Pages touched:**
+- Updated `wiki/concepts/venue-scorekeeper-bias.md` - recorded the live v5 Phase 2.5.4 scorecard result, including leakage-safe prior-season correction usage and the residual corrected-distance z-score failure.
+- Updated `index.md` - refreshed Last updated summary to include the venue-correction scorecard run.
+**Notes:** The DB-backed runner passes held-out log-loss and home-ice over-correction gates but fails the residual venue z-score gate (`max |z| = 4.038`, worst venue-season `20092010:Madison Square Garden`). The current shrinkage distance correction remains exploratory and should not feed production xG training until the residual gate passes or a better correction policy is selected.
+
+### 2026-04-30 - UPDATE
+
+**Action:** Remediated live validation-scorecard failures and tightened the model-training contract
+**Source:** `src/database.py` (`load_training_shot_events`), `src/validation.py` (`practical_calibration_metrics`, `run_temporal_cv_with_prior_season_calibration`, `evaluate_leakage_audit`), `notebooks/model_validation_framework.ipynb`, `artifacts/validation_scorecard_latest.md`, `artifacts/venue_correction_validation_latest.md`, `docs/xg_model_roadmap.md`, `docs/xg_model_components/05_xg_model_training_and_calibration.md`, `docs/xg_model_components/06_model_validation_framework.md`, `CLAUDE.md`
+**Pages touched:**
+- Updated `wiki/methods/calibration-analysis.md` - changed Hosmer-Lemeshow from hard gate to diagnostic and documented practical calibration gates.
+- Updated `wiki/methods/temporal-cross-validation.md` - documented prior-season Platt calibration and selected scorecard feature families.
+- Updated `wiki/data/nhl-api-shot-events.md` - documented the tightened loader contract and live training-row count.
+- Updated `wiki/concepts/expected-goals-xg.md` - refreshed the calibration metric summary.
+- Updated `wiki/concepts/venue-scorekeeper-bias.md` - refreshed live DB-backed venue scorecard metrics under the tightened contract.
+- Updated `index.md` - refreshed Last updated summary.
+**Notes:** The live validation scorecard now passes 8/8 gates (AUC 0.7551, slope 0.9870, max decile error 0.407 pp, ECE 0.193 pp, subgroup max error 1.24 pp). Venue correction remains exploratory because residual corrected-distance z-score still fails (`max |z| = 4.067`).

@@ -30,6 +30,14 @@ SCORECARD_OUTPUT_NAME = "validation_scorecard_latest.md"
 SCORECARD_SENTINEL = "VALIDATION SCORECARD"
 DEFAULT_EXECUTION_TIMEOUT_SECONDS = 3600
 DEFAULT_PROGRESS_INTERVAL_SECONDS = 30.0
+_NBCONVERT_ENTRYPOINT = (
+    "import asyncio\n"
+    "policy_factory = getattr(asyncio, 'WindowsSelectorEventLoopPolicy', None)\n"
+    "if policy_factory is not None:\n"
+    "    asyncio.set_event_loop_policy(policy_factory())\n"
+    "from nbconvert.nbconvertapp import main\n"
+    "raise SystemExit(main())\n"
+)
 
 
 def _format_duration(seconds: float) -> str:
@@ -102,6 +110,28 @@ def _run_command_with_progress(
 
     step_elapsed = _format_duration(time.monotonic() - step_started_at)
     _progress(f"Finished {label} in {step_elapsed}.", run_started_at)
+
+
+def _build_nbconvert_command(
+    notebook_path: Path,
+    output_dir: Path,
+    timeout_seconds: int,
+) -> list[str]:
+    """Build the nbconvert command with Windows event-loop policy preconfigured."""
+    return [
+        sys.executable,
+        "-c",
+        _NBCONVERT_ENTRYPOINT,
+        "--to",
+        "notebook",
+        "--execute",
+        f"--ExecutePreprocessor.timeout={timeout_seconds}",
+        str(notebook_path),
+        "--output",
+        EXECUTED_NOTEBOOK_NAME,
+        "--output-dir",
+        str(output_dir),
+    ]
 
 
 def _prepare_database(database_path: Path) -> tuple[list[tuple[str | None, int]], int]:
@@ -238,21 +268,11 @@ def main() -> None:
         run_started_at,
     )
     _run_command_with_progress(
-        [
-            sys.executable,
-            "-m",
-            "jupyter",
-            "nbconvert",
-            "--to",
-            "notebook",
-            "--execute",
-            f"--ExecutePreprocessor.timeout={args.timeout_seconds}",
-            str(args.notebook_path),
-            "--output",
-            EXECUTED_NOTEBOOK_NAME,
-            "--output-dir",
-            str(args.output_dir),
-        ],
+        _build_nbconvert_command(
+            args.notebook_path,
+            args.output_dir,
+            args.timeout_seconds,
+        ),
         label="notebook execution",
         progress_interval_seconds=args.progress_interval_seconds,
         run_started_at=run_started_at,

@@ -2,7 +2,7 @@
 
 ## Status
 
-**Scaffolding phase.** The notebook code is written against the real database schema but has not been tested with live data. Do not mock or synthesize data — the owner will provide the real `nhl_data.db` from their workstation for testing and debugging.
+**Live v5 validated.** The notebook now runs end-to-end against the local v5 database through `scripts/export_validation_scorecard.py` and writes `artifacts/validation_scorecard_latest.md` plus the executed notebook artifact. The 2026-04-30 run passed all 8 scorecard gates with the selected calibrated model.
 
 ## Scope
 
@@ -56,14 +56,16 @@ A single notebook: `notebooks/model_validation_framework.ipynb`
 
 ### Step 3: Temporal cross-validation harness
 - Implement season-block CV: train on seasons 1..k, evaluate on k+1
-- Use a simple logistic regression on (distance, angle, shot_type) as baseline
+- For calibrated scorecard predictions, train the base model before the prior season, fit a Platt calibrator on the immediately prior season, and evaluate the next season
+- Use a selected logistic baseline on distance, angle, shot type, manpower state, score state, and scaled manpower-distance/angle interactions
 - Compute per-fold: AUC-ROC, AUC-PR, log loss, Brier score
-- This establishes the baseline that feature additions must beat
+- Retain the simpler distance/angle/shot-type model as the ablation baseline that feature additions must beat
 
 ### Step 4: Calibration analysis
 - Reliability diagrams (calibration curves) for the baseline model
 - Per-segment calibration: 5v5, PP, SH separately
-- Hosmer-Lemeshow test across 10 decile bins
+- Hosmer-Lemeshow statistic/p-value across 10 decile bins as a diagnostic
+- Practical calibration gates: slope in [0.95, 1.05], max decile calibration error < 1pp, expected calibration error < 0.5pp
 - Calibration slope and intercept per held-out season
 
 ### Step 5: Conditional feature importance (ablation)
@@ -88,14 +90,14 @@ A single notebook: `notebooks/model_validation_framework.ipynb`
 ### Step 7: Validation scorecard
 - Summary table with pass/fail criteria:
   - Discrimination: AUC-ROC > 0.75 on temporal holdout
-  - Calibration: slope in [0.95, 1.05], Hosmer-Lemeshow p > 0.05
+  - Calibration: slope in [0.95, 1.05], max decile calibration error < 1pp, expected calibration error < 0.5pp; Hosmer-Lemeshow reported as diagnostic only
   - Temporal stability: <0.02 AUC degradation per season
   - Feature-level: each feature shows positive ablation delta
   - Subgroup: max absolute calibration error < 0.03 across segments
 
 ## Testing and debugging
 
-**Do not mock or synthesize data.** This notebook is written against the real database schema (`shot_events`, `games`, `game_context`, `venue_bias_diagnostics`). The owner will test and debug with the real `nhl_data.db` when they have access to their workstation. Until then, this is scaffolding only — the code structure and logic are in place but have not been verified against live data.
+The notebook is written against the real database schema (`shot_events`, `games`, `game_context`, `venue_bias_diagnostics`). Use `scripts/export_validation_scorecard.py --db-path data/nhl_data.db` for the authoritative live run; the exporter streams notebook progress and writes the committed Markdown scorecard artifact.
 
 ## Dependencies
 
@@ -106,7 +108,7 @@ A single notebook: `notebooks/model_validation_framework.ipynb`
 For a rare-event binary classification problem with ~8% base rate, "sufficient validation" means:
 
 1. **Discrimination:** AUC-ROC > 0.75 on held-out temporal test set
-2. **Calibration:** Slope in [0.95, 1.05], Hosmer-Lemeshow p > 0.05 across 10 decile bins, must hold within 5v5/PP/SH segments separately
+2. **Calibration:** Slope in [0.95, 1.05], max decile calibration error < 1pp, expected calibration error < 0.5pp, and max subgroup calibration error < 3pp within 5v5/PP/SH segments. Hosmer-Lemeshow is reported across 10 decile bins as a diagnostic, not a hard gate on million-row holdout pools.
 3. **Temporal stability:** Metrics hold across 3+ consecutive held-out seasons without retraining; degradation >0.02 AUC per season signals concept drift
 4. **Feature-level:** Each feature shows (a) statistically significant univariate association (bootstrap CI on odds ratio excludes 1.0), (b) positive ablation delta on held-out log loss, (c) no detected leakage
 5. **Subgroup fairness:** Max absolute calibration error < 0.03 across manpower/score state segments

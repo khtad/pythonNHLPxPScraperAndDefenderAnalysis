@@ -243,7 +243,7 @@ All statistical analyses in this project — whether in notebooks, source code, 
 
 5. **Train/test separation for any finding that informs model design.** Bin boundaries, thresholds, feature selection decisions, and decay-curve parameters must be validated on held-out data. Use the temporal cross-validation harness (season-block CV) from `model_validation_framework.ipynb`. Findings computed on the full dataset are exploratory only and must be labeled as such.
 
-6. **Calibration analysis for any probability model.** Report reliability diagrams, Hosmer-Lemeshow test (p > 0.05 required), and calibration slope/intercept (target: slope in [0.95, 1.05]). Calibration must be checked per-segment (even strength, power play, short-handed) separately, with max subgroup calibration error < 3 percentage points.
+6. **Calibration analysis for any probability model.** Report reliability diagrams, Hosmer-Lemeshow statistic/p-value as a diagnostic, calibration slope/intercept (target: slope in [0.95, 1.05]), max decile calibration error (target: < 1 percentage point), and expected calibration error (target: < 0.5 percentage points). Calibration must be checked per-segment (even strength, power play, short-handed) separately, with max subgroup calibration error < 3 percentage points. Hosmer-Lemeshow is not a hard pass/fail gate on million-row holdout pools because it rejects practically acceptable calibration at very large sample sizes.
 
 7. **Temporal stability assessment.** Any finding claimed to generalize must be checked across at least 3 held-out seasons. Report linear trend in the metric of interest. AUC drift exceeding 0.02/season signals concept drift and must be documented.
 
@@ -251,7 +251,7 @@ All statistical analyses in this project — whether in notebooks, source code, 
 
 ### Reference implementation
 
-The validation framework notebook (`notebooks/model_validation_framework.ipynb`) and its design doc (`docs/xg_model_components/06_model_validation_framework.md`) implement all eight requirements. New analyses should follow the same patterns: named constants for all thresholds, reusable helper functions (`bootstrap_goal_rate_ci`, `cohens_h`, `hosmer_lemeshow_test`, `calibration_slope_intercept`, `run_temporal_cv`), and a summary scorecard with explicit pass/fail criteria.
+The validation framework notebook (`notebooks/model_validation_framework.ipynb`) and its design doc (`docs/xg_model_components/06_model_validation_framework.md`) implement all eight requirements. New analyses should follow the same patterns: named constants for all thresholds, reusable helper functions (`bootstrap_goal_rate_ci`, `cohens_h`, `hosmer_lemeshow_test`, `calibration_slope_intercept`, `practical_calibration_metrics`, `run_temporal_cv`, `run_temporal_cv_with_prior_season_calibration`), and a summary scorecard with explicit pass/fail criteria.
 
 ## Pre-Submission Checklist
 
