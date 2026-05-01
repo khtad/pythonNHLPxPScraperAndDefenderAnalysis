@@ -15,14 +15,19 @@ Estimate and correct rink/venue scorer effects that distort event recording and 
 - `scripts/export_venue_correction_validation.py` exports the Phase 2.5.4
   scorecard once a metrics JSON has been generated from a current database.
   The scorecard gates are held-out log-loss non-worsening, home-ice
-  over-correction, and max residual venue z-score.
+  over-correction, max distance/location residual venue z-score, and max
+  sample-adequate event-frequency residual venue z-score.
 - `scripts/export_venue_correction_validation_from_db.py` generates that
   metrics payload directly from SQLite with forward-chaining temporal CV and
   prior-season-only venue distance corrections under the shared model-training
-  contract. The 2026-04-30 live v5 refresh passes held-out log-loss and
-  home-ice guardrails but fails the residual corrected-distance z-score gate
-  (`max |z| = 4.067`), so the current correction remains exploratory rather
-  than a production xG training feature.
+  contract. It also computes normalized event-frequency diagnostics by
+  venue-season, event group, and game-type scope. The primary frequency gate
+  uses sample-adequate regular-season training attempts; blocked-shot and
+  all-attempt frequencies are diagnostic only. The 2026-05-01 live v5 refresh
+  passes held-out log-loss and home-ice guardrails but fails the residual
+  corrected-distance z-score gate (`max |z| = 4.067`) and event-frequency
+  residual gate (`max |z| = 3.572`), so the current correction remains
+  exploratory rather than a production xG training feature.
 
 ## Extension points
 - Official-specific bias estimation where metadata supports.

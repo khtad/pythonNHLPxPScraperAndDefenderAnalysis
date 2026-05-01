@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-04-30 (Recorded scorecard remediation, calibration-policy update, and tightened training contract)
+> Last updated: 2026-05-01 (Added event-frequency scorekeeper-bias diagnostics and refreshed venue-correction scorecard policy)
 
 ## Concepts
 

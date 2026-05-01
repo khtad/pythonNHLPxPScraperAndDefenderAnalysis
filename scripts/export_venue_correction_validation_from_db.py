@@ -30,11 +30,13 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from database import (  # noqa: E402
+    BLOCKED_SHOT_EVENT_TYPE,
     GOAL_SHOT_EVENT_TYPE,
     MODEL_TRAINING_GAME_TYPES,
     NON_GOAL_TRAINING_SHOT_EVENT_TYPES,
     REGULAR_SEASON_GAME_TYPE,
     REGULAR_SEASON_SHOOTOUT_PERIOD_MIN,
+    VALID_SHOT_EVENT_TYPES,
     VALID_SHOT_TYPES,
     _MIN_TRAINING_SEASON,
     _VENUE_CORRECTION_METHOD,
@@ -45,9 +47,27 @@ from export_venue_correction_validation import (  # noqa: E402
     format_scorecard,
 )
 from validation import MIN_TRAIN_SEASONS, evaluate_venue_correction_scorecard  # noqa: E402
+from venue_bias import (  # noqa: E402
+    ANOMALY_REAL_SCOREKEEPER_REGIME_SUPPORTED,
+    EVENT_FREQUENCY_GROUP_ALL_ATTEMPTS,
+    EVENT_FREQUENCY_GROUP_BLOCKED_SHOTS,
+    EVENT_FREQUENCY_GROUP_TRAINING_ATTEMPTS,
+    EVENT_FREQUENCY_GROUPS,
+    EVENT_FREQUENCY_SCOPE_REGULAR_SEASON,
+    EVENT_FREQUENCY_SCOPE_TRAINING_CONTRACT,
+    EVENT_FREQUENCY_SCOPES,
+    PRIMARY_EVENT_FREQUENCY_GROUP,
+    PRIMARY_EVENT_FREQUENCY_SCOPE,
+    annotate_event_frequency_anomalies,
+    compute_event_frequency_diagnostics,
+    compute_paired_away_frequency_comparisons,
+    primary_event_frequency_residual_z_scores,
+    top_event_frequency_anomalies,
+)
 
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "nhl_data.db"
 MIN_RESIDUAL_SHOTS_PER_VENUE_SEASON = 400
+EVENT_FREQUENCY_REPORT_LIMIT = 10
 
 
 def _format_duration(seconds: float) -> str:
@@ -135,6 +155,145 @@ def _load_prior_correction_lookup(
             (str(row["season"]), float(row["distance_adjustment"]))
         )
     return dict(lookup)
+
+
+def load_event_frequency_game_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for game_type_scope in EVENT_FREQUENCY_SCOPES:
+        for event_group in EVENT_FREQUENCY_GROUPS:
+            rows.extend(
+                _load_event_frequency_game_rows_for_slice(
+                    conn,
+                    game_type_scope,
+                    event_group,
+                )
+            )
+    return rows
+
+
+def _load_event_frequency_game_rows_for_slice(
+    conn: sqlite3.Connection,
+    game_type_scope: str,
+    event_group: str,
+) -> list[dict[str, Any]]:
+    event_predicate, event_params = _event_frequency_join_predicate(
+        game_type_scope,
+        event_group,
+    )
+    game_predicate, game_params = _event_frequency_game_predicate(game_type_scope)
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""SELECT ? AS game_type_scope,
+                  ? AS event_group,
+                  g.game_id, g.season, g.venue_name,
+                  g.home_team_id, g.away_team_id,
+                  COUNT(se.shot_event_id) AS event_count,
+                  SUM(CASE WHEN se.shooting_team_id = g.home_team_id THEN 1 ELSE 0 END)
+                      AS home_event_count,
+                  SUM(CASE WHEN se.shooting_team_id = g.away_team_id THEN 1 ELSE 0 END)
+                      AS away_event_count
+           FROM games g
+           LEFT JOIN shot_events se
+             ON se.game_id = g.game_id
+            {event_predicate}
+           WHERE g.season IS NOT NULL
+             AND g.season >= ?
+             AND g.venue_name IS NOT NULL
+             {game_predicate}
+           GROUP BY g.game_id, g.season, g.venue_name,
+                    g.home_team_id, g.away_team_id
+           ORDER BY g.season, g.venue_name, g.game_id""",
+        (
+            game_type_scope,
+            event_group,
+            *event_params,
+            _MIN_TRAINING_SEASON,
+            *game_params,
+        ),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def _event_frequency_game_predicate(game_type_scope: str) -> tuple[str, tuple[Any, ...]]:
+    if game_type_scope == EVENT_FREQUENCY_SCOPE_REGULAR_SEASON:
+        return "AND substr(CAST(g.game_id AS TEXT), 5, 2) = ?", (
+            REGULAR_SEASON_GAME_TYPE,
+        )
+    if game_type_scope == EVENT_FREQUENCY_SCOPE_TRAINING_CONTRACT:
+        placeholders = ", ".join("?" for _ in MODEL_TRAINING_GAME_TYPES)
+        return (
+            f"AND substr(CAST(g.game_id AS TEXT), 5, 2) IN ({placeholders})",
+            tuple(MODEL_TRAINING_GAME_TYPES),
+        )
+    raise ValueError(f"Unsupported event-frequency scope: {game_type_scope}")
+
+
+def _event_frequency_join_predicate(
+    game_type_scope: str,
+    event_group: str,
+) -> tuple[str, tuple[Any, ...]]:
+    scope_predicate, scope_params = _event_frequency_event_scope_predicate(
+        game_type_scope
+    )
+    group_predicate, group_params = _event_frequency_group_predicate(event_group)
+    return (
+        f"{scope_predicate} {group_predicate}",
+        (*scope_params, *group_params),
+    )
+
+
+def _event_frequency_event_scope_predicate(
+    game_type_scope: str,
+) -> tuple[str, tuple[Any, ...]]:
+    if game_type_scope == EVENT_FREQUENCY_SCOPE_REGULAR_SEASON:
+        return "AND se.period < ?", (REGULAR_SEASON_SHOOTOUT_PERIOD_MIN,)
+    if game_type_scope == EVENT_FREQUENCY_SCOPE_TRAINING_CONTRACT:
+        return (
+            """AND NOT (
+                   substr(CAST(g.game_id AS TEXT), 5, 2) = ?
+                   AND se.period >= ?
+               )""",
+            (REGULAR_SEASON_GAME_TYPE, REGULAR_SEASON_SHOOTOUT_PERIOD_MIN),
+        )
+    raise ValueError(f"Unsupported event-frequency scope: {game_type_scope}")
+
+
+def _event_frequency_group_predicate(
+    event_group: str,
+) -> tuple[str, tuple[Any, ...]]:
+    if event_group == EVENT_FREQUENCY_GROUP_TRAINING_ATTEMPTS:
+        return (
+            """AND se.event_schema_version = ?
+               AND se.distance_to_goal IS NOT NULL
+               AND se.angle_to_goal IS NOT NULL
+               AND se.shot_type IS NOT NULL
+               AND se.manpower_state IS NOT NULL
+               AND se.score_state IS NOT NULL
+               AND (
+                   (se.shot_event_type = ? AND se.is_goal = 1)
+                   OR (se.shot_event_type IN (?, ?) AND se.is_goal = 0)
+               )""",
+            (
+                _XG_EVENT_SCHEMA_VERSION,
+                GOAL_SHOT_EVENT_TYPE,
+                *NON_GOAL_TRAINING_SHOT_EVENT_TYPES,
+            ),
+        )
+    if event_group == EVENT_FREQUENCY_GROUP_BLOCKED_SHOTS:
+        return (
+            """AND se.event_schema_version = ?
+               AND se.shot_event_type = ?
+               AND se.is_goal = 0""",
+            (_XG_EVENT_SCHEMA_VERSION, BLOCKED_SHOT_EVENT_TYPE),
+        )
+    if event_group == EVENT_FREQUENCY_GROUP_ALL_ATTEMPTS:
+        placeholders = ", ".join("?" for _ in VALID_SHOT_EVENT_TYPES)
+        return (
+            f"""AND se.event_schema_version = ?
+                AND se.shot_event_type IN ({placeholders})""",
+            (_XG_EVENT_SCHEMA_VERSION, *VALID_SHOT_EVENT_TYPES),
+        )
+    raise ValueError(f"Unsupported event-frequency group: {event_group}")
 
 
 def _latest_prior_adjustment(
@@ -264,6 +423,39 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
     correction_lookup = _load_prior_correction_lookup(conn, correction_method)
     _progress(f"Loaded corrections for {len(correction_lookup):,} venues.", run_started_at)
 
+    _progress("Loading event-frequency game counts.", run_started_at)
+    frequency_game_rows = load_event_frequency_game_rows(conn)
+    _progress(
+        f"Loaded {len(frequency_game_rows):,} game/group/scope frequency rows.",
+        run_started_at,
+    )
+
+    _progress("Computing event-frequency diagnostics and paired comparisons.", run_started_at)
+    frequency_diagnostics = compute_event_frequency_diagnostics(frequency_game_rows)
+    paired_frequency = compute_paired_away_frequency_comparisons(frequency_game_rows)
+    annotated_frequency = annotate_event_frequency_anomalies(
+        frequency_diagnostics,
+        paired_frequency,
+    )
+    frequency_residual_z_scores = primary_event_frequency_residual_z_scores(
+        annotated_frequency
+    )
+    if not frequency_residual_z_scores:
+        raise RuntimeError("No primary event-frequency residual z-scores were produced.")
+    frequency_candidates = [
+        row for row in annotated_frequency if row.get("candidate_anomaly")
+    ]
+    supported_frequency_regimes = [
+        row for row in frequency_candidates
+        if row["anomaly_classification"] == ANOMALY_REAL_SCOREKEEPER_REGIME_SUPPORTED
+    ]
+    _progress(
+        f"Computed {len(frequency_residual_z_scores):,} primary frequency residuals; "
+        f"{len(frequency_candidates):,} candidate anomalies, "
+        f"{len(supported_frequency_regimes):,} supported real-regime candidates.",
+        run_started_at,
+    )
+
     y = np.array([int(row["is_goal"]) for row in rows], dtype=int)
     distances = np.array([float(row["distance_to_goal"]) for row in rows], dtype=float)
     angles = np.array([float(row["angle_to_goal"]) for row in rows], dtype=float)
@@ -330,6 +522,7 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
         corrected_prob,
         is_home,
         residual_z_scores,
+        frequency_residual_z_scores,
     )
     metrics["correction_method"] = f"{correction_method} (latest prior-season only)"
     metrics["training_snapshot"] = (
@@ -340,8 +533,19 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
         "Generated from live SQLite data with forward-chaining temporal CV. "
         "Each shot uses the latest venue distance adjustment from a season before "
         "the shot's season; same-season venue corrections are not used for holdout "
-        "rows. Residual z-scores are venue-season corrected-distance mean z-scores, "
-        "because the implemented correction targets distance bias rather than shot-count bias."
+        "rows. Distance residual z-scores are venue-season corrected-distance mean "
+        "z-scores. Event-frequency residual z-scores use sample-adequate "
+        "regular-season training attempts as the primary gate; blocked-shot and "
+        "all-attempt frequencies are reported as diagnostics and remain outside "
+        "the current shot-level xG training contract."
+    )
+    metrics["event_frequency_primary_scope"] = PRIMARY_EVENT_FREQUENCY_SCOPE
+    metrics["event_frequency_primary_group"] = PRIMARY_EVENT_FREQUENCY_GROUP
+    metrics["event_frequency_candidate_count"] = len(frequency_candidates)
+    metrics["event_frequency_supported_count"] = len(supported_frequency_regimes)
+    metrics["event_frequency_top_anomalies"] = top_event_frequency_anomalies(
+        annotated_frequency,
+        limit=EVENT_FREQUENCY_REPORT_LIMIT,
     )
     return metrics
 

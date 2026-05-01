@@ -26,6 +26,8 @@ The project's venue bias analysis (`notebooks/venue_bias_analysis.ipynb`) comput
 
 - Mean and standard deviation of x_coord and y_coord per venue
 - Total shot event count per game per venue
+- Normalized event-frequency residuals by venue-season, event group, and game-type scope
+- Paired away-team-season comparisons for frequency anomalies
 - Distance-to-goal distribution per venue
 - Season-over-season stability of venue effects
 
@@ -59,13 +61,15 @@ Phase 2 also wired the per-season diagnostic populator into the scraper pipeline
 
 The initial correction layer is now implemented in `src/database.py` [5]. `populate_venue_bias_corrections(conn, season)` computes a per-venue distance adjustment toward the season league mean and shrinks it by sample size (`sample_shots / (sample_shots + prior)`), storing parameters in `venue_bias_corrections`. `finalize_season_diagnostics()` now runs both diagnostic and correction population each season [4]. At consumption time, `load_game_shots_with_venue_correction()` adds `distance_to_goal_corrected` using the persisted adjustment while preserving raw distance values [5].
 
-This is an implementation baseline, not final model policy. The Phase 2.5.4 scorecard harness is implemented: `evaluate_venue_correction_scorecard()` combines held-out log-loss, home-ice over-correction, and residual venue z-score gates, while `scripts/export_venue_correction_validation.py` formats the artifact [6].
+This is an implementation baseline, not final model policy. The Phase 2.5.4 scorecard harness is implemented: `evaluate_venue_correction_scorecard()` combines held-out log-loss, home-ice over-correction, distance/location residual z-score, and event-frequency residual z-score gates, while `scripts/export_venue_correction_validation.py` formats the artifact [6].
 
-After the v5 backfill, `scripts/export_venue_correction_validation_from_db.py` ran the live validation from SQLite using forward-chaining temporal CV and only prior-season venue distance corrections for each held-out shot [6]. The 2026-04-30 refresh uses the same tightened model-training contract as `load_training_shot_events`: schema v5, season >= 20092010, regular/playoff in-game shots, no regular-season shootouts, non-blocked target-consistent shot rows, and non-null core model features. The live scorecard passes held-out log-loss (`delta = -0.000017`) and the home-ice over-correction guardrail (`removed = -0.013`, limit 0.500), but fails the residual corrected-distance venue-season z-score gate (`max |z| = 4.067`, limit < 2.000; worst venue-season `20092010:Madison Square Garden`) [6]. The current shrinkage distance correction therefore remains exploratory and should not feed production xG training until that residual gate passes or a different correction policy is selected [2][6].
+The event-frequency refresh adds `src/venue_bias.py` helpers for venue-season event rates, frequency z-scores, paired away-team-season comparisons, bootstrap CIs, paired Cohen's d, known-regime priors, and anomaly classification [6]. The primary frequency gate uses sample-adequate regular-season training attempts, and sample-inadequate venue-seasons are excluded from the league mean/std baseline used to compute frequency z-scores. Blocked-shot and all-attempt frequencies are reported as diagnostics because they are important scorekeeper-bias evidence but remain outside the current shot-level xG training contract [6].
+
+After the v5 backfill, `scripts/export_venue_correction_validation_from_db.py` ran the live validation from SQLite using forward-chaining temporal CV and only prior-season venue distance corrections for each held-out shot [6]. The 2026-05-01 refresh uses the same tightened model-training contract as `load_training_shot_events`: schema v5, season >= 20092010, regular/playoff in-game shots, no regular-season shootouts, non-blocked target-consistent shot rows, and non-null core model features. The live scorecard passes held-out log-loss (`delta = -0.000017`) and the home-ice over-correction guardrail (`removed = -0.013`, limit 0.500), but fails the residual corrected-distance venue-season z-score gate (`max |z| = 4.067`, limit < 2.000; worst venue-season `20092010:Madison Square Garden`) and the sample-adequate event-frequency residual gate (`max |z| = 3.572`, limit < 2.000; worst venue-season `20112012:Prudential Center`) [6]. The current shrinkage distance correction therefore remains exploratory and should not feed production xG training until both residual families pass or a different correction/exclusion policy is selected [2][6].
 
 The venue bias analysis was particularly sensitive to the v2 coordinate normalization bug. Pre-2020 data with ~50% unnormalized coordinates would have produced spurious venue effects that were actually normalization failures. The current v5 refresh resolves the stale-schema blocker, but venue-level coordinate analyses should still be re-derived after any future coordinate-normalization or correction-policy change.
 
-Last verified: 2026-04-30
+Last verified: 2026-05-01
 
 ## Sources
 
@@ -75,7 +79,7 @@ Last verified: 2026-04-30
 [4] Diagnostic populator wiring — `src/main.py` (`finalize_season_diagnostics()`), `src/database.py` (`populate_venue_diagnostics()`)
 [5] Venue correction implementation — `src/database.py` (`create_venue_bias_corrections_table()`, `populate_venue_bias_corrections()`, `load_game_shots_with_venue_correction()`)
 
-[6] Venue correction validation harness and live result - `src/validation.py` (`evaluate_venue_correction_scorecard()`), `scripts/export_venue_correction_validation.py`, `scripts/export_venue_correction_validation_from_db.py`, `artifacts/venue_correction_validation_latest.md`, `tests/test_venue_correction_validation_export.py`, `tests/test_venue_correction_validation_from_db.py`
+[6] Venue correction validation harness and live result - `src/validation.py` (`evaluate_venue_correction_scorecard()`), `src/venue_bias.py`, `scripts/export_venue_correction_validation.py`, `scripts/export_venue_correction_validation_from_db.py`, `notebooks/venue_bias_analysis.ipynb`, `artifacts/venue_correction_validation_latest.md`, `tests/test_venue_bias.py`, `tests/test_venue_correction_validation_export.py`, `tests/test_venue_correction_validation_from_db.py`
 
 ## Related Pages
 
@@ -87,6 +91,7 @@ Last verified: 2026-04-30
 
 ## Revision History
 
+- 2026-05-01 - Added event-frequency scorekeeper diagnostics, anomaly classification, sample-adequate z-score baselines, and the refreshed live scorecard result with separate distance/location and event-frequency residual gates.
 - 2026-04-28 - Recorded the live v5 DB-backed venue-correction validation result: log-loss and home-ice guardrails pass, residual corrected-distance z-score fails.
 - 2026-04-28 - Added Phase 2.5.4 scorecard harness status and source references for held-out/log-loss, home-ice guardrail, and residual z-score validation gates.
 - 2026-04-30 - Refreshed live DB scorecard metrics after the training-contract cleanup.

@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+pytest.importorskip("scipy")
 pytest.importorskip("sklearn")
 
 
@@ -68,3 +69,19 @@ def test_build_feature_matrix_uses_fixed_shot_type_contract():
     between_legs_index = exporter.VALID_SHOT_TYPES.index("between-legs")
     assert matrix[0, 2 + deflected_index] == pytest.approx(1.0)
     assert matrix[1, 2 + between_legs_index] == pytest.approx(1.0)
+
+
+def test_event_frequency_predicates_define_primary_scope_and_group():
+    game_predicate, game_params = exporter._event_frequency_game_predicate(
+        exporter.EVENT_FREQUENCY_SCOPE_REGULAR_SEASON
+    )
+    join_predicate, join_params = exporter._event_frequency_join_predicate(
+        exporter.EVENT_FREQUENCY_SCOPE_REGULAR_SEASON,
+        exporter.EVENT_FREQUENCY_GROUP_TRAINING_ATTEMPTS,
+    )
+
+    assert "substr(CAST(g.game_id AS TEXT), 5, 2) = ?" in game_predicate
+    assert game_params == (exporter.REGULAR_SEASON_GAME_TYPE,)
+    assert "se.period < ?" in join_predicate
+    assert "se.distance_to_goal IS NOT NULL" in join_predicate
+    assert exporter._XG_EVENT_SCHEMA_VERSION in join_params

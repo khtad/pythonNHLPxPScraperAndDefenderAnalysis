@@ -232,3 +232,12 @@
 - Updated `wiki/concepts/venue-scorekeeper-bias.md` - refreshed live DB-backed venue scorecard metrics under the tightened contract.
 - Updated `index.md` - refreshed Last updated summary.
 **Notes:** The live validation scorecard now passes 8/8 gates (AUC 0.7551, slope 0.9870, max decile error 0.407 pp, ECE 0.193 pp, subgroup max error 1.24 pp). Venue correction remains exploratory because residual corrected-distance z-score still fails (`max |z| = 4.067`).
+
+### 2026-05-01 - UPDATE
+
+**Action:** Added event-frequency scorekeeper-bias diagnostics and refreshed the venue-correction scorecard policy
+**Source:** `src/venue_bias.py`, `src/validation.py` (`evaluate_venue_correction_scorecard`), `scripts/export_venue_correction_validation.py`, `scripts/export_venue_correction_validation_from_db.py`, `notebooks/venue_bias_analysis.ipynb`, `artifacts/venue_correction_validation_latest.md`, `docs/xg_model_roadmap.md`, `docs/xg_model_components/04_scorekeeper_bias.md`, `CLAUDE.md`
+**Pages touched:**
+- Updated `wiki/concepts/venue-scorekeeper-bias.md` - documented event-frequency diagnostics, paired away-team-season comparison, anomaly classification, sample-adequate primary frequency gating, and the refreshed live scorecard result.
+- Updated `index.md` - refreshed Last updated summary.
+**Notes:** The venue-correction scorecard now separates distance/location residuals from event-frequency residuals. Frequency z-score league baselines and the primary acceptance gate exclude sample-inadequate venue-seasons, while one-off neutral/outdoor venues remain visible as `insufficient_evidence` diagnostics. The live DB-backed run still passes held-out log-loss and home-ice guardrails, but fails corrected-distance residuals (`max |z| = 4.067`, worst `20092010:Madison Square Garden`) and sample-adequate regular-season training-attempt frequency residuals (`max |z| = 3.572`, worst `20112012:Prudential Center`).
