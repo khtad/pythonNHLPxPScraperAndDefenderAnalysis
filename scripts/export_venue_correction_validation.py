@@ -34,7 +34,8 @@ REQUIRED_PAYLOAD_FIELDS = (
     "y_prob_baseline",
     "y_prob_corrected",
     "is_home_attempt",
-    "residual_venue_z_scores",
+    "distance_residual_venue_z_scores",
+    "event_frequency_residual_venue_z_scores",
 )
 
 
@@ -90,9 +91,20 @@ def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         payload["y_prob_baseline"],
         payload["y_prob_corrected"],
         payload["is_home_attempt"],
-        payload["residual_venue_z_scores"],
+        payload["distance_residual_venue_z_scores"],
+        payload["event_frequency_residual_venue_z_scores"],
     )
-    for metadata_field in ("correction_method", "training_snapshot", "notes"):
+    metadata_fields = (
+        "correction_method",
+        "training_snapshot",
+        "notes",
+        "event_frequency_top_anomalies",
+        "event_frequency_candidate_count",
+        "event_frequency_supported_count",
+        "event_frequency_primary_scope",
+        "event_frequency_primary_group",
+    )
+    for metadata_field in metadata_fields:
         if metadata_field in payload:
             metrics[metadata_field] = payload[metadata_field]
     return metrics
@@ -120,19 +132,30 @@ def format_scorecard(metrics: dict[str, Any]) -> str:
         f"{_format_gate(metrics['home_ice_guardrail_pass'])} | "
         f"removed = {metrics['advantage_removed_ratio']:.3f}, "
         f"max = {metrics['max_allowed_advantage_removed_ratio']:.3f} |\n"
-        f"| Residual venue z-scores | "
-        f"{_format_gate(metrics['residual_z_score_pass'])} | "
-        f"max abs(z) = {metrics['max_abs_residual_z_score']:.3f}, "
-        f"limit < {metrics['max_allowed_abs_residual_z_score']:.3f} |\n\n"
+        f"| Distance/location residual z-scores | "
+        f"{_format_gate(metrics['distance_residual_z_score_pass'])} | "
+        f"max abs(z) = {metrics['max_abs_distance_residual_z_score']:.3f}, "
+        f"limit < {metrics['max_allowed_abs_distance_residual_z_score']:.3f} |\n"
+        f"| Event-frequency residual z-scores | "
+        f"{_format_gate(metrics['event_frequency_residual_z_score_pass'])} | "
+        f"max abs(z) = {metrics['max_abs_event_frequency_z_score']:.3f}, "
+        f"limit < {metrics['max_allowed_abs_event_frequency_z_score']:.3f} |\n\n"
         "## Summary Metrics\n\n"
         f"- Overall pass: {_format_gate(metrics['overall_pass'])}\n"
         f"- Holdout rows: {metrics['n_rows']:,}\n"
-        f"- Venues evaluated: {metrics['n_venues']:,}\n"
+        f"- Distance residual venue-seasons evaluated: "
+        f"{metrics['n_distance_residual_venues']:,}\n"
+        f"- Event-frequency residual venue-seasons evaluated: "
+        f"{metrics['n_event_frequency_residual_venues']:,}\n"
         f"- Baseline log loss: {metrics['baseline_log_loss']:.6f}\n"
         f"- Corrected log loss: {metrics['corrected_log_loss']:.6f}\n"
         f"- Baseline home advantage: {metrics['baseline_home_advantage']:.6f}\n"
         f"- Corrected home advantage: {metrics['corrected_home_advantage']:.6f}\n"
-        f"- Worst residual venue: `{metrics['worst_residual_venue']}`\n"
+        f"- Worst distance/location residual: "
+        f"`{metrics['worst_distance_residual_venue']}`\n"
+        f"- Worst event-frequency residual: "
+        f"`{metrics['worst_event_frequency_residual_venue']}`\n"
+        f"{_format_event_frequency_anomalies(metrics)}"
         f"{_format_notes(notes)}"
     )
 
@@ -145,6 +168,52 @@ def _format_notes(notes: str) -> str:
     if not notes:
         return ""
     return f"\n## Notes\n\n{notes}\n"
+
+
+def _format_event_frequency_anomalies(metrics: dict[str, Any]) -> str:
+    top_anomalies = metrics.get("event_frequency_top_anomalies") or []
+    primary_scope = metrics.get("event_frequency_primary_scope", "unspecified")
+    primary_group = metrics.get("event_frequency_primary_group", "unspecified")
+    candidate_count = metrics.get("event_frequency_candidate_count", 0)
+    supported_count = metrics.get("event_frequency_supported_count", 0)
+    text = (
+        "\n## Event-Frequency Diagnostics\n\n"
+        f"Primary frequency gate: sample-adequate `{primary_scope}:{primary_group}`\n\n"
+        f"- Candidate frequency anomalies: {candidate_count:,}\n"
+        f"- Supported real-scorekeeper regimes: {supported_count:,}\n"
+    )
+    if not top_anomalies:
+        return text + "\nNo event-frequency anomalies exceeded the reporting threshold.\n"
+
+    lines = [
+        "",
+        "| Scope | Group | Venue-season | z | Events/game | Paired diff/game | "
+        "95% CI | d | Classification | Known prior |",
+        "|-------|-------|--------------|---|-------------|------------------|"
+        "--------|---|----------------|-------------|",
+    ]
+    for row in top_anomalies:
+        ci_text = (
+            f"[{_format_optional_float(row.get('paired_bootstrap_ci_low'))}, "
+            f"{_format_optional_float(row.get('paired_bootstrap_ci_high'))}]"
+        )
+        known_prior = "YES" if row.get("known_scorekeeper_prior") else "NO"
+        lines.append(
+            f"| `{row['game_type_scope']}` | `{row['event_group']}` | "
+            f"`{row['season']}:{row['venue_name']}` | "
+            f"{float(row['frequency_z_score']):.3f} | "
+            f"{float(row['events_per_game']):.2f} | "
+            f"{_format_optional_float(row.get('paired_mean_diff_per_game'))} | "
+            f"{ci_text} | {_format_optional_float(row.get('paired_cohens_d'))} | "
+            f"`{row['anomaly_classification']}` | {known_prior} |"
+        )
+    return text + "\n".join(lines) + "\n"
+
+
+def _format_optional_float(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.3f}"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -194,11 +263,19 @@ def main() -> None:
     _progress("Loading metrics payload.", run_started_at)
     payload = load_payload(args.metrics_json)
     y_true_rows = _len_if_available(payload.get("y_true", []))
-    residual_count = _len_if_available(payload.get("residual_venue_z_scores", []))
+    distance_residual_count = _len_if_available(
+        payload.get("distance_residual_venue_z_scores", [])
+    )
+    frequency_residual_count = _len_if_available(
+        payload.get("event_frequency_residual_venue_z_scores", [])
+    )
     _progress(
         "Payload summary: "
         f"holdout rows={y_true_rows if y_true_rows is not None else 'unknown'}, "
-        f"residual venues={residual_count if residual_count is not None else 'unknown'}.",
+        "distance residuals="
+        f"{distance_residual_count if distance_residual_count is not None else 'unknown'}, "
+        "frequency residuals="
+        f"{frequency_residual_count if frequency_residual_count is not None else 'unknown'}.",
         run_started_at,
     )
 
@@ -208,13 +285,18 @@ def main() -> None:
         "Gate results: "
         f"log_loss={_format_gate(metrics['log_loss_non_worse_pass'])}, "
         f"home_ice={_format_gate(metrics['home_ice_guardrail_pass'])}, "
-        f"residual_z={_format_gate(metrics['residual_z_score_pass'])}, "
+        f"distance_z={_format_gate(metrics['distance_residual_z_score_pass'])}, "
+        "frequency_z="
+        f"{_format_gate(metrics['event_frequency_residual_z_score_pass'])}, "
         f"overall={_format_gate(metrics['overall_pass'])}.",
         run_started_at,
     )
     _progress(
-        f"Worst residual venue: {metrics['worst_residual_venue']} "
-        f"(max abs(z)={metrics['max_abs_residual_z_score']:.3f}).",
+        "Worst residuals: "
+        f"distance={metrics['worst_distance_residual_venue']} "
+        f"(max abs(z)={metrics['max_abs_distance_residual_z_score']:.3f}), "
+        f"frequency={metrics['worst_event_frequency_residual_venue']} "
+        f"(max abs(z)={metrics['max_abs_event_frequency_z_score']:.3f}).",
         run_started_at,
     )
 

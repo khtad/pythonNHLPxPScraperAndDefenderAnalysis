@@ -48,6 +48,7 @@ _BOOTSTRAP_DEFAULT_SEED = 42
 _CALIBRATION_LOGIT_CLIP = 1e-10
 VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL = 0.5
 VENUE_CORRECTION_MAX_ABS_RESIDUAL_Z_SCORE = 2.0
+VENUE_CORRECTION_MAX_ABS_EVENT_FREQUENCY_Z_SCORE = 2.0
 _VENUE_CORRECTION_MIN_BASELINE_ADVANTAGE = 1e-9
 _VENUE_CORRECTION_LOG_LOSS_TOLERANCE = 1e-12
 
@@ -475,18 +476,22 @@ def evaluate_venue_correction_scorecard(
     y_prob_baseline: np.ndarray,
     y_prob_corrected: np.ndarray,
     is_home_attempt: np.ndarray,
-    residual_venue_z_scores: Mapping[str, float] | Sequence[float],
+    distance_residual_venue_z_scores: Mapping[str, float] | Sequence[float],
+    event_frequency_residual_venue_z_scores: Mapping[str, float] | Sequence[float],
     max_home_ice_advantage_removal: float = (
         VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL
     ),
-    max_abs_residual_z_score: float = VENUE_CORRECTION_MAX_ABS_RESIDUAL_Z_SCORE,
+    max_abs_distance_residual_z_score: float = VENUE_CORRECTION_MAX_ABS_RESIDUAL_Z_SCORE,
+    max_abs_event_frequency_z_score: float = (
+        VENUE_CORRECTION_MAX_ABS_EVENT_FREQUENCY_Z_SCORE
+    ),
 ) -> Dict[str, Any]:
     """Evaluate the Phase 2.5.4 venue-correction scorecard gates.
 
     Combines the held-out log-loss and home-ice over-correction checks from
-    ``evaluate_venue_correction_holdout`` with the residual venue z-score gate
-    from the roadmap. ``residual_venue_z_scores`` may be either a mapping of
-    venue labels to post-correction residual z-scores or a plain sequence.
+    ``evaluate_venue_correction_holdout`` with separate distance/location and
+    event-frequency residual z-score gates. Residual z-scores may be either a
+    mapping of venue labels to z-scores or a plain sequence.
     """
     holdout = evaluate_venue_correction_holdout(
         y_true,
@@ -495,24 +500,56 @@ def evaluate_venue_correction_scorecard(
         is_home_attempt,
         max_home_ice_advantage_removal=max_home_ice_advantage_removal,
     )
-    residual_items = _coerce_residual_z_score_items(residual_venue_z_scores)
-    worst_venue, worst_residual_z_score = max(
-        residual_items,
-        key=lambda item: abs(item[1]),
+    distance_items = _coerce_residual_z_score_items(distance_residual_venue_z_scores)
+    worst_distance_venue, worst_distance_z_score = _max_abs_residual_z_score_item(
+        distance_items
     )
-    max_abs_residual_z_score_observed = abs(worst_residual_z_score)
-    residual_z_score_pass = (
-        max_abs_residual_z_score_observed < max_abs_residual_z_score
+    max_abs_distance_residual_z_score_observed = abs(worst_distance_z_score)
+    distance_residual_z_score_pass = (
+        max_abs_distance_residual_z_score_observed < max_abs_distance_residual_z_score
+    )
+
+    frequency_items = _coerce_residual_z_score_items(
+        event_frequency_residual_venue_z_scores
+    )
+    worst_frequency_venue, worst_frequency_z_score = _max_abs_residual_z_score_item(
+        frequency_items
+    )
+    max_abs_frequency_z_score_observed = abs(worst_frequency_z_score)
+    event_frequency_residual_z_score_pass = (
+        max_abs_frequency_z_score_observed < max_abs_event_frequency_z_score
     )
 
     result = dict(holdout)
     result.update({
-        "n_venues": int(len(residual_items)),
-        "worst_residual_venue": worst_venue,
-        "max_abs_residual_z_score": float(max_abs_residual_z_score_observed),
-        "max_allowed_abs_residual_z_score": float(max_abs_residual_z_score),
-        "residual_z_score_pass": bool(residual_z_score_pass),
-        "overall_pass": bool(holdout["overall_pass"] and residual_z_score_pass),
+        "n_distance_residual_venues": int(len(distance_items)),
+        "worst_distance_residual_venue": worst_distance_venue,
+        "max_abs_distance_residual_z_score": float(
+            max_abs_distance_residual_z_score_observed
+        ),
+        "max_allowed_abs_distance_residual_z_score": float(
+            max_abs_distance_residual_z_score
+        ),
+        "distance_residual_z_score_pass": bool(distance_residual_z_score_pass),
+        "n_event_frequency_residual_venues": int(len(frequency_items)),
+        "worst_event_frequency_residual_venue": worst_frequency_venue,
+        "max_abs_event_frequency_z_score": float(max_abs_frequency_z_score_observed),
+        "max_allowed_abs_event_frequency_z_score": float(
+            max_abs_event_frequency_z_score
+        ),
+        "event_frequency_residual_z_score_pass": bool(
+            event_frequency_residual_z_score_pass
+        ),
+        "n_venues": int(len(distance_items)),
+        "worst_residual_venue": worst_distance_venue,
+        "max_abs_residual_z_score": float(max_abs_distance_residual_z_score_observed),
+        "max_allowed_abs_residual_z_score": float(max_abs_distance_residual_z_score),
+        "residual_z_score_pass": bool(distance_residual_z_score_pass),
+        "overall_pass": bool(
+            holdout["overall_pass"]
+            and distance_residual_z_score_pass
+            and event_frequency_residual_z_score_pass
+        ),
     })
     return result
 
@@ -537,3 +574,9 @@ def _coerce_residual_z_score_items(
     if any(not np.isfinite(z_score) for _, z_score in items):
         raise ValueError("Residual venue z-scores must be finite numbers.")
     return items
+
+
+def _max_abs_residual_z_score_item(
+    residual_items: Sequence[tuple[str, float]],
+) -> tuple[str, float]:
+    return max(residual_items, key=lambda item: abs(item[1]))
