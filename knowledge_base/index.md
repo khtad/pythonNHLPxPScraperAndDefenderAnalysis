@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-05-01 (Added event-frequency scorekeeper-bias diagnostics and refreshed venue-correction scorecard policy)
+> Last updated: 2026-05-01 (Closed player database row-coverage blocker and refreshed RAPM prerequisites)
 
 ## Concepts
 

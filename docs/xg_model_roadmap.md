@@ -92,7 +92,7 @@ The target architecture must be modular enough to support incremental delivery a
 
 ---
 
-## Current Implementation Status (as of 2026-04-30)
+## Current Implementation Status (as of 2026-05-01)
 
 Status here is verified against the live database, not just self-reported from prior commits.
 
@@ -101,15 +101,15 @@ Status here is verified against the live database, not just self-reported from p
 | Phase 0 — contracts, schema, reproducibility | **Complete** | `_XG_EVENT_SCHEMA_VERSION = "v5"` (`src/database.py`); live validation run found all 2,122,963 `shot_events` rows at v5 and zero stale training-eligible rows; version-aware backfill (`game_has_current_shot_events`, `delete_game_shot_events`) present; `validate_shot_events_quality` covers enums/ranges/duplicates. |
 | Phase 1 — event/state foundation | **Complete** | `normalize_coordinates`, distance/angle, 11-type shot taxonomy, score/manpower/time classifiers in `src/xg_features.py`. Pre-2020 negative-x rate is now 0.0 (was ~50% at v2). Pre-event score tracker `_track_score` prevents post-goal leakage. |
 | Phase 2 — context feature engineering | **Complete (with two criteria formally deferred)** | `game_context` populated (26,343 rows at v1) with rest/travel/timezone features; `validate_game_context_quality` added. Faceoff decay bins implemented. `populate_venue_diagnostics` is wired into the scraper pipeline via `finalize_season_diagnostics` and runs per season. VIF review done on live data (see below). The two remaining acceptance criteria — held-out faceoff-decay validation and zone-start change-on-the-fly inference — are formally deferred to their gating dependencies: Phase 2.5.2 (`src/validation.py` helpers) and a future shifts-ingestion branch, respectively. |
-| Phase 2.5 — rigor foundation (new, gates Phase 3) | **In progress** | 2.5.1 and 2.5.2 are implemented in `src/` with tests; 2.5.3 now has a live v5 validation scorecard artifact that passes all 8 gates; 2.5.4 now has an initial correction table (`venue_bias_corrections`), shrinkage-based distance adjustment parameters wired into `finalize_season_diagnostics`, event-frequency scorekeeper diagnostics, a JSON scorecard exporter, and a DB-backed live runner. The live venue-correction scorecard passes held-out log-loss and home-ice guardrail gates but fails both distance/location and event-frequency residual z-score gates, so the correction is not accepted for production xG training yet. 2.5.5 has a recorded decision and an enforced loader guard (`load_training_shot_events`) excluding pre-2009 seasons and non-training shot rows. |
+| Phase 2.5 — rigor foundation (new, gates Phase 3) | **In progress** | 2.5.1 and 2.5.2 are implemented in `src/` with tests; live player readiness now passes with 4,694 `players`, 831,573 `player_game_stats` rows, and 831,573 current-version `player_game_features` rows. 2.5.3 now has a live v5 validation scorecard artifact that passes all 8 gates; 2.5.4 now has an initial correction table (`venue_bias_corrections`), shrinkage-based distance adjustment parameters wired into `finalize_season_diagnostics`, event-frequency scorekeeper diagnostics, a JSON scorecard exporter, and a DB-backed live runner. The live venue-correction scorecard passes held-out log-loss and home-ice guardrail gates but fails both distance/location and event-frequency residual z-score gates, so the correction is not accepted for production xG training yet. 2.5.5 has a recorded decision and an enforced loader guard (`load_training_shot_events`) excluding pre-2009 seasons and non-training shot rows. |
 | Phase 3 — baseline xG model | **Ready to start** | No training code in `src/`. The live validation scorecard now passes 8/8 gates with a selected calibrated logistic model (`artifacts/validation_scorecard_latest.md`), so Phase 3 model implementation can proceed while keeping unresolved features excluded. |
 | Phase 4 — enhanced xG model | **Not started** | Depends on Phase 3. |
-| Phase 5 — RAPM on xG | **Blocked on data** | `players` dim has **0 rows**; `player_game_stats` and `player_game_features` are empty; no player/roster endpoint in `src/nhl_api.py`. |
+| Phase 5 — RAPM on xG | **Blocked on downstream prerequisites** | Player identity and player-game foundations are populated and validated. Remaining blockers are validated xG predictions with uncertainty plus future shift/TOI/on-ice data needed for a true RAPM design matrix. |
 | Phase 6–7 — team strength, hardening | **Not started** | Depends on Phase 3–5. |
 
 ### Critical blockers (must close before Phase 3 modeling is meaningful)
 
-1. **`players` dim is empty (0 rows).** Blocks handedness features (off-wing flag, effective-angle interactions), `player_game_stats`, `player_game_features`, and every step of RAPM. No player metadata endpoint exists in `src/nhl_api.py`.
+1. **Player database blocker is closed.** Live validation on 2026-05-01 found `ids_missing_and_not_unavailable = 0`, 2,301/2,301 players with ≥ 50 career shots have `shoots_catches`, `player_game_stats` covers all 831,573 event-derived player-game pairs, and `player_game_features` now has 831,573 current-version rows with zero missing, duplicate, stale-version, or unsupported-value rows. The remaining RAPM data gap is shift/TOI/on-ice exposure and xG prediction/residual inputs, not player identity metadata.
 2. **2007–2008 shot-distance anomaly.** Average `distance_to_goal` for 2007–08 is ~19–20 units vs ~34 for 2009+. `wrap-around` and `deflected` shots have `NULL` distances in 2007–08 (coordinates absent in that era). **Phase 2.5.5 decision:** exclude pre-2009 seasons from model-training inputs; enforced by `load_training_shot_events` and test coverage.
 3. **Venue bias correction is implemented but not accepted.** `scripts/export_venue_correction_validation_from_db.py` now runs the Phase 2.5.4 gates against live v5 data using only prior-season venue adjustments for each held-out shot and the same tightened training contract as the validation scorecard. The 2026-05-01 scorecard passes held-out log-loss (`delta = -0.000017`) and home-ice over-correction (`removed = -0.013`, limit 0.500) but fails distance/location residuals (`max |z| = 4.067`, limit < 2.000; worst venue-season `20092010:Madison Square Garden`) and sample-adequate event-frequency residuals (`max |z| = 3.572`, limit < 2.000; worst venue-season `20112012:Prudential Center`). Keep the correction out of production xG training until both residual families pass or a better correction/exclusion policy is selected.
 4. **Validation scorecard blocker is resolved for selected features.** The 2026-04-30 live v5 validation framework run passes 8/8 gates: mean AUC 0.7551, calibration slope 0.9870, max decile error 0.407 pp, ECE 0.193 pp, subgroup max error 1.24 pp, and AUC drift +0.0001/season. Faceoff, rest/travel, raw venue features, and other unresolved candidates remain listed as excluded pending and do not feed the selected model.
@@ -213,11 +213,12 @@ Five deliverables, each gated by a quantitative acceptance criterion. This phase
 - Add `get_player_metadata(player_id)` to `src/nhl_api.py`, using the module-level `_session` (per CLAUDE.md HTTP-reuse rule). Target endpoint: NHL player landing page or equivalent that returns `shoots_catches`, position, handedness, first/last name, and team history.
 - Add `upsert_player(conn, player)` in `src/database.py` and use `executemany` for the backfill loop.
 - Backfill every distinct `shooter_id` and `goalie_id` in `shot_events` (~2k–3k players); idempotent by construction.
-- Populate `player_game_stats` and `player_game_features` as part of the same run.
+- Populate `player_game_stats` and `player_game_features` as part of the same run. `player_game_features` v1 materializes row coverage, season, and `game_number_for_player`; TOI/points rolling columns remain `NULL` until shift or boxscore ingestion supplies real TOI and assist inputs.
 
 Acceptance:
-- `players.shoots_catches` populated for ≥ 99% of players with ≥ 50 career shots.
-- `player_game_stats` covers every `(player_id, game_id)` that appears in raw event data; `validate_player_game_stats_quality` returns zero issues.
+- ✅ `players.shoots_catches` populated for ≥ 99% of players with ≥ 50 career shots. Live result: 2,301/2,301 covered.
+- ✅ `player_game_stats` covers every `(player_id, game_id)` that appears in raw event data; `validate_player_game_stats_quality` returns zero issues. Live result: 831,573/831,573 pairs covered.
+- ✅ `player_game_features` covers every `player_game_stats` row at the current `_FEATURE_SET_VERSION`; `validate_player_game_features_quality` returns zero issues. Live result: 831,573/831,573 rows covered.
 
 ### 2.5.2 Promote validation helpers to `src/validation.py`
 
@@ -308,7 +309,7 @@ Acceptance criteria:
 ## Phase 5: RAPM on xG
 
 Deliverables:
-- Player design matrix built from populated `players` dim and `player_game_features` (blocked on Phase 2.5.1).
+- Player design matrix built from populated `players` dim and `player_game_features`; no longer blocked on Phase 2.5.1, but still requires xG prediction/residual inputs plus shift/TOI/on-ice exposure data.
 - Ridge (or elastic-net) regression on xGF/xGA; separate offensive (ORAPM) and defensive (DRAPM) outputs per `knowledge_base/wiki/methods/rapm-regularized-adjusted-plus-minus.md`.
 - **Uncertainty propagation:** run RAPM on each bootstrap replicate of xG predictions (or via a parametric delta-method equivalent) and report player impacts with bootstrap CIs. Point-only RAPM is not accepted.
 - Covariates: zone-start share, quality-of-teammate/competition, score-state exposure (per component 02).

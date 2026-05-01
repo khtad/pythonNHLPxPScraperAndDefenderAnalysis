@@ -485,6 +485,47 @@ def test_backfill_missing_game_data_skips_fully_processed_games(
     mock_full_pbp.assert_not_called()
 
 
+@patch("main.populate_player_game_features")
+@patch("main.populate_player_game_stats")
+@patch("main.backfill_player_metadata")
+def test_refresh_player_tables_runs_stats_then_features(
+    mock_backfill_metadata, mock_populate_stats, mock_populate_features,
+):
+    conn = _in_memory_conn()
+    call_order = []
+
+    def fake_backfill(connection, fetch_fn):
+        assert connection is conn
+        assert fetch_fn is main.get_player_metadata
+        call_order.append("metadata")
+        return 3, 2, 1
+
+    def fake_populate_stats(connection):
+        assert connection is conn
+        call_order.append("stats")
+        return 10
+
+    def fake_populate_features(connection):
+        assert connection is conn
+        call_order.append("features")
+        return 10
+
+    mock_backfill_metadata.side_effect = fake_backfill
+    mock_populate_stats.side_effect = fake_populate_stats
+    mock_populate_features.side_effect = fake_populate_features
+
+    result = main.refresh_player_tables(conn)
+
+    assert call_order == ["metadata", "stats", "features"]
+    assert result == {
+        "metadata_attempted": 3,
+        "metadata_upserted": 2,
+        "metadata_unavailable": 1,
+        "player_game_stats_rows": 10,
+        "player_game_features_rows": 10,
+    }
+
+
 @patch("main.backfill_missing_game_data")
 @patch("main.main")
 def test_run_scraper_and_backfill_calls_main_then_backfill(

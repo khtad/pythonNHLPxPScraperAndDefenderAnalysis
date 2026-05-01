@@ -16,6 +16,32 @@ _GAME_ID_SUFFIX_START = len(_GAME_TABLE_PREFIX)
 _SQLITE_TABLE_TYPE = "table"
 _VALID_POSITION_GROUPS = ("F", "D", "G")
 _FEATURE_SET_VERSION = "v1"
+_PLAYER_METADATA_COVERAGE_MIN_CAREER_SHOTS = 50
+_PLAYER_METADATA_HANDEDNESS_COVERAGE_TARGET = 0.99
+_PLAYER_GAME_FEATURES_UNSUPPORTED_COLUMNS = (
+    "toi_rank_pos_5g",
+    "toi_rank_pos_10g",
+    "toi_rolling_mean_5g",
+    "points_rolling_10g",
+)
+_PLAYER_IDS_FROM_SHOT_EVENTS_CTE = """
+WITH ids AS (
+    SELECT shooter_id AS player_id FROM shot_events WHERE shooter_id IS NOT NULL
+    UNION
+    SELECT goalie_id AS player_id FROM shot_events WHERE goalie_id IS NOT NULL
+)
+"""
+_PLAYER_GAME_EVENT_PAIRS_CTE = """
+WITH pairs AS (
+    SELECT shooter_id AS player_id, game_id
+    FROM shot_events
+    WHERE shooter_id IS NOT NULL
+    UNION
+    SELECT goalie_id AS player_id, game_id
+    FROM shot_events
+    WHERE goalie_id IS NOT NULL
+)
+"""
 
 # ── xG Phase 0: schema versions ──────────────────────────────────────
 
@@ -560,6 +586,155 @@ def validate_player_game_stats_quality(conn, max_toi_seconds=3600):
         "invalid_position_group_rows": _count_invalid_enum(
             cursor, "player_game_stats", "position_group", _VALID_POSITION_GROUPS),
     }
+
+
+def _count_unsupported_player_game_feature_values(cursor):
+    predicates = [
+        f"{_quote_identifier(column)} IS NOT NULL"
+        for column in _PLAYER_GAME_FEATURES_UNSUPPORTED_COLUMNS
+    ]
+    cursor.execute(
+        "SELECT COUNT(*) FROM player_game_features "
+        f"WHERE {' OR '.join(predicates)}"
+    )
+    return cursor.fetchone()[0]
+
+
+def validate_player_game_features_quality(conn):
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT COUNT(*)
+           FROM player_game_stats AS pgs
+           LEFT JOIN player_game_features AS pgf
+             ON pgf.player_id = pgs.player_id
+            AND pgf.game_id = pgs.game_id
+           WHERE pgf.player_id IS NULL"""
+    )
+    missing_feature_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        """SELECT COUNT(*)
+           FROM player_game_features AS pgf
+           LEFT JOIN player_game_stats AS pgs
+             ON pgs.player_id = pgf.player_id
+            AND pgs.game_id = pgf.game_id
+           WHERE pgs.player_id IS NULL"""
+    )
+    orphan_feature_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        """SELECT COUNT(*)
+           FROM player_game_features
+           WHERE feature_set_version IS NULL
+              OR feature_set_version != ?""",
+        (_FEATURE_SET_VERSION,),
+    )
+    stale_feature_set_version_rows = cursor.fetchone()[0]
+
+    cursor.execute(
+        """SELECT COUNT(*)
+           FROM player_game_features
+           WHERE game_number_for_player IS NULL"""
+    )
+    null_game_number_for_player_rows = cursor.fetchone()[0]
+
+    return {
+        "duplicate_player_game_feature_rows": _count_duplicates(
+            cursor, "player_game_features", ("player_id", "game_id")),
+        "missing_player_game_feature_rows": missing_feature_rows,
+        "orphan_player_game_feature_rows": orphan_feature_rows,
+        "stale_feature_set_version_rows": stale_feature_set_version_rows,
+        "null_game_number_for_player_rows": null_game_number_for_player_rows,
+        "unsupported_player_game_feature_value_rows":
+            _count_unsupported_player_game_feature_values(cursor),
+    }
+
+
+def validate_player_database_readiness(
+    conn,
+    min_career_shots=_PLAYER_METADATA_COVERAGE_MIN_CAREER_SHOTS,
+    handedness_coverage_target=_PLAYER_METADATA_HANDEDNESS_COVERAGE_TARGET,
+):
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""{_PLAYER_IDS_FROM_SHOT_EVENTS_CTE}
+           SELECT COUNT(*)
+           FROM ids
+           LEFT JOIN players AS p ON p.player_id = ids.player_id
+           LEFT JOIN player_metadata_unavailable AS u
+             ON u.player_id = ids.player_id
+           WHERE p.player_id IS NULL
+             AND u.player_id IS NULL"""
+    )
+    ids_missing_and_not_unavailable = cursor.fetchone()[0]
+
+    cursor.execute(
+        """WITH shot_counts AS (
+               SELECT shooter_id AS player_id, COUNT(*) AS shots
+               FROM shot_events
+               WHERE shooter_id IS NOT NULL
+               GROUP BY shooter_id
+               HAVING COUNT(*) >= ?
+           )
+           SELECT
+               COUNT(*) AS eligible_players,
+               SUM(CASE
+                   WHEN p.shoots_catches IS NULL OR p.shoots_catches = ''
+                   THEN 1 ELSE 0 END) AS missing_handedness
+           FROM shot_counts AS sc
+           LEFT JOIN players AS p ON p.player_id = sc.player_id""",
+        (min_career_shots,),
+    )
+    eligible_players, missing_handedness = cursor.fetchone()
+    eligible_players = int(eligible_players or 0)
+    missing_handedness = int(missing_handedness or 0)
+    if eligible_players:
+        handedness_coverage = (
+            eligible_players - missing_handedness
+        ) / eligible_players
+    else:
+        handedness_coverage = 1.0
+
+    cursor.execute(
+        f"""{_PLAYER_GAME_EVENT_PAIRS_CTE}
+           SELECT COUNT(*)
+           FROM pairs"""
+    )
+    player_game_pairs_in_events = cursor.fetchone()[0]
+
+    cursor.execute(
+        f"""{_PLAYER_GAME_EVENT_PAIRS_CTE}
+           SELECT COUNT(*)
+           FROM pairs
+           LEFT JOIN player_game_stats AS pgs
+             ON pgs.player_id = pairs.player_id
+            AND pgs.game_id = pairs.game_id
+           WHERE pgs.player_id IS NULL"""
+    )
+    player_game_pairs_missing_stats = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM player_game_stats")
+    player_game_stats_rows = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM player_game_features")
+    player_game_features_rows = cursor.fetchone()[0]
+
+    report = {
+        "ids_missing_and_not_unavailable": ids_missing_and_not_unavailable,
+        "career_shot_players": eligible_players,
+        "career_shot_players_missing_shoots_catches": missing_handedness,
+        "career_shot_players_handedness_coverage": handedness_coverage,
+        "career_shot_players_handedness_below_target": int(
+            handedness_coverage < handedness_coverage_target
+        ),
+        "player_game_pairs_in_events": player_game_pairs_in_events,
+        "player_game_pairs_missing_stats": player_game_pairs_missing_stats,
+        "player_game_stats_rows": player_game_stats_rows,
+        "player_game_features_rows": player_game_features_rows,
+    }
+    report.update(validate_player_game_stats_quality(conn))
+    report.update(validate_player_game_features_quality(conn))
+    return report
 
 
 def create_player_metadata_unavailable_table(conn):
@@ -1163,6 +1338,70 @@ def populate_player_game_stats(conn):
     )
     conn.commit()
     return len(batch)
+
+
+def populate_player_game_features(conn):
+    """Materialize one feature row for each player_game_stats row.
+
+    Current v1 player-game features are limited to ordering metadata because
+    TOI and assists/non-shot counters are still placeholders until shift or
+    boxscore ingestion lands. Unsupported rolling columns are explicitly set
+    to NULL so downstream consumers do not treat zero-filled source stats as
+    real deployment signal.
+    """
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """DELETE FROM player_game_features
+           WHERE NOT EXISTS (
+               SELECT 1
+               FROM player_game_stats AS pgs
+               WHERE pgs.player_id = player_game_features.player_id
+                 AND pgs.game_id = player_game_features.game_id
+           )"""
+    )
+
+    cursor.execute(
+        """INSERT OR REPLACE INTO player_game_features (
+               player_id,
+               game_id,
+               season,
+               game_number_for_player,
+               toi_rank_pos_5g,
+               toi_rank_pos_10g,
+               toi_rolling_mean_5g,
+               points_rolling_10g,
+               feature_set_version
+           )
+           SELECT
+               player_id,
+               game_id,
+               season,
+               game_number_for_player,
+               NULL,
+               NULL,
+               NULL,
+               NULL,
+               ?
+           FROM (
+               SELECT
+                   pgs.player_id,
+                   pgs.game_id,
+                   g.season,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY pgs.player_id
+                       ORDER BY g.game_date IS NULL, g.game_date, pgs.game_id
+                   ) AS game_number_for_player
+               FROM player_game_stats AS pgs
+               LEFT JOIN games AS g ON g.game_id = pgs.game_id
+           ) AS ordered_player_games
+           ORDER BY player_id, game_number_for_player""",
+        (_FEATURE_SET_VERSION,),
+    )
+    conn.commit()
+
+    cursor.execute("SELECT COUNT(*) FROM player_game_features")
+    return cursor.fetchone()[0]
 
 
 # ── Phase 2, Area 1: game_context table ─────────────────────────────

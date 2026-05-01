@@ -4,6 +4,7 @@ from datetime import date
 import pytest
 
 from database import (
+    _FEATURE_SET_VERSION,
     _XG_EVENT_SCHEMA_VERSION,
     _quote_identifier,
     PlayerMetadataNotFound,
@@ -32,10 +33,13 @@ from database import (
     load_training_shot_events,
     mark_date_collected,
     mark_players_metadata_unavailable,
+    populate_player_game_features,
     populate_player_game_stats,
     upsert_game_metadata,
     upsert_player,
     upsert_players,
+    validate_player_database_readiness,
+    validate_player_game_features_quality,
     validate_player_game_stats_quality,
 )
 
@@ -1083,3 +1087,214 @@ def test_populate_player_game_stats_clears_stale_rows_after_reprocess(conn):
         "WHERE game_id = 915 ORDER BY player_id"
     )
     assert [r[0] for r in cur.fetchall()] == [101, 201]
+
+
+def _insert_player_game_stat(conn, player_id, game_id, position_group="F"):
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO player_game_stats
+              (player_id, game_id, team_id, position_group)
+           VALUES (?, ?, ?, ?)""",
+        (player_id, game_id, 1, position_group),
+    )
+    conn.commit()
+
+
+def test_populate_player_game_features_covers_stats_and_orders_games(conn):
+    ensure_player_database_schema(conn)
+    upsert_game_metadata(conn, 921, game_date="2023-10-10", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    upsert_game_metadata(conn, 920, game_date="2023-10-05", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _insert_player_game_stat(conn, 101, 921)
+    _insert_player_game_stat(conn, 101, 920)
+    _insert_player_game_stat(conn, 201, 920, position_group="G")
+
+    row_count = populate_player_game_features(conn)
+
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM player_game_stats")
+    assert row_count == cur.fetchone()[0]
+
+    cur.execute(
+        """SELECT game_id, season, game_number_for_player
+           FROM player_game_features
+           WHERE player_id = 101
+           ORDER BY game_number_for_player"""
+    )
+    assert cur.fetchall() == [
+        (920, "20232024", 1),
+        (921, "20232024", 2),
+    ]
+
+
+def test_populate_player_game_features_sets_unsupported_columns_null(conn):
+    ensure_player_database_schema(conn)
+    upsert_game_metadata(conn, 922, game_date="2023-10-10", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _insert_player_game_stat(conn, 101, 922)
+
+    populate_player_game_features(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        """SELECT toi_rank_pos_5g, toi_rank_pos_10g,
+                  toi_rolling_mean_5g, points_rolling_10g
+           FROM player_game_features
+           WHERE player_id = 101 AND game_id = 922"""
+    )
+    assert cur.fetchone() == (None, None, None, None)
+
+
+def test_populate_player_game_features_is_idempotent(conn):
+    ensure_player_database_schema(conn)
+    upsert_game_metadata(conn, 923, game_date="2023-10-10", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _insert_player_game_stat(conn, 101, 923)
+
+    populate_player_game_features(conn)
+    populate_player_game_features(conn)
+
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM player_game_features")
+    assert cur.fetchone()[0] == 1
+
+
+def test_populate_player_game_features_clears_stale_rows(conn):
+    ensure_player_database_schema(conn)
+    upsert_game_metadata(conn, 924, game_date="2023-10-10", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _insert_player_game_stat(conn, 101, 924)
+    _insert_player_game_stat(conn, 102, 924)
+    populate_player_game_features(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM player_game_stats WHERE player_id = ? AND game_id = ?",
+        (102, 924),
+    )
+    conn.commit()
+
+    populate_player_game_features(conn)
+
+    cur.execute(
+        "SELECT player_id FROM player_game_features WHERE game_id = 924 "
+        "ORDER BY player_id"
+    )
+    assert [r[0] for r in cur.fetchall()] == [101]
+
+
+def test_populate_player_game_features_writes_current_feature_version(conn):
+    ensure_player_database_schema(conn)
+    upsert_game_metadata(conn, 925, game_date="2023-10-10", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _insert_player_game_stat(conn, 101, 925)
+
+    populate_player_game_features(conn)
+
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT feature_set_version FROM player_game_features")
+    assert cur.fetchall() == [(_FEATURE_SET_VERSION,)]
+
+
+def test_validate_player_game_features_quality_reports_missing_rows(conn):
+    ensure_player_database_schema(conn)
+    upsert_game_metadata(conn, 926, game_date="2023-10-10", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _insert_player_game_stat(conn, 101, 926)
+
+    report = validate_player_game_features_quality(conn)
+
+    assert report["missing_player_game_feature_rows"] == 1
+
+
+def test_validate_player_game_features_quality_reports_duplicate_keys(conn):
+    create_player_game_stats_table(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """CREATE TABLE player_game_features (
+            player_id INTEGER NOT NULL,
+            game_id INTEGER NOT NULL,
+            season TEXT,
+            game_number_for_player INTEGER,
+            toi_rank_pos_5g REAL,
+            toi_rank_pos_10g REAL,
+            toi_rolling_mean_5g REAL,
+            points_rolling_10g REAL,
+            feature_set_version TEXT
+        )"""
+    )
+    _insert_player_game_stat(conn, 101, 926)
+    cur.executemany(
+        """INSERT INTO player_game_features
+              (player_id, game_id, game_number_for_player, feature_set_version)
+           VALUES (?, ?, ?, ?)""",
+        [
+            (101, 926, 1, _FEATURE_SET_VERSION),
+            (101, 926, 1, _FEATURE_SET_VERSION),
+        ],
+    )
+    conn.commit()
+
+    report = validate_player_game_features_quality(conn)
+
+    assert report["duplicate_player_game_feature_rows"] == 1
+
+
+def test_validate_player_game_features_quality_reports_stale_versions(conn):
+    ensure_player_database_schema(conn)
+    upsert_game_metadata(conn, 927, game_date="2023-10-10", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _insert_player_game_stat(conn, 101, 927)
+    populate_player_game_features(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE player_game_features SET feature_set_version = ?",
+        ("old",),
+    )
+    conn.commit()
+
+    report = validate_player_game_features_quality(conn)
+
+    assert report["stale_feature_set_version_rows"] == 1
+
+
+def test_validate_player_game_features_quality_reports_unsupported_values(conn):
+    ensure_player_database_schema(conn)
+    upsert_game_metadata(conn, 928, game_date="2023-10-10", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    _insert_player_game_stat(conn, 101, 928)
+    populate_player_game_features(conn)
+
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE player_game_features SET toi_rolling_mean_5g = ?",
+        (123.0,),
+    )
+    conn.commit()
+
+    report = validate_player_game_features_quality(conn)
+
+    assert report["unsupported_player_game_feature_value_rows"] == 1
+
+
+def test_validate_player_database_readiness_passes_supported_player_tables(conn):
+    ensure_player_database_schema(conn)
+    create_shot_events_table(conn)
+    upsert_game_metadata(conn, 929, game_date="2023-10-10", season="20232024",
+                         home_team_id=1, away_team_id=2)
+    upsert_player(conn, _player_row(101, position="C", team_id=1, shoots="L"))
+    mark_players_metadata_unavailable(conn, [201])
+    _seed_shot(conn, 929, 1, shooter_id=101, goalie_id=201, shooting_team_id=1)
+    populate_player_game_stats(conn)
+    populate_player_game_features(conn)
+
+    report = validate_player_database_readiness(conn, min_career_shots=1)
+
+    assert report["ids_missing_and_not_unavailable"] == 0
+    assert report["career_shot_players_handedness_coverage"] == 1.0
+    assert report["player_game_pairs_missing_stats"] == 0
+    assert report["missing_player_game_feature_rows"] == 0
+    assert report["stale_feature_set_version_rows"] == 0
+    assert report["unsupported_player_game_feature_value_rows"] == 0

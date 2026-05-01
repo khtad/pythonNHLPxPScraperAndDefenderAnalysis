@@ -67,17 +67,17 @@ Per the component design doc [1]:
 
 ## Relevance to This Project
 
-RAPM is Phase 4+ in the xG roadmap — it depends on having a validated xG model first [1][2]. The player design matrices will use data from the `player_game_stats` table (which tracks per-game TOI and position), and the xG residuals will come from the `shot_events` table with model predictions applied.
+RAPM is Phase 4+ in the xG roadmap — it depends on having a validated xG model first [1][2]. The player identity and player-game row-coverage blocker is now closed: `players`, `player_game_stats`, and `player_game_features` are populated from the shot-event foundation, with `validate_player_database_readiness()` checking missing metadata, handedness coverage, stats coverage, feature coverage, duplicate rows, and stale feature versions [3].
 
-The `player_game_features` table has placeholder columns for rolling RAPM-derived features, with `feature_set_version` tracking which model version produced them [3].
+The `player_game_features` table currently materializes one row per `player_game_stats` row, including season, `game_number_for_player`, and `feature_set_version`. Rolling TOI and points columns intentionally remain `NULL` until shift or boxscore ingestion supplies real TOI and assist inputs [3].
 
-Last verified: 2026-04-07
+Last verified: 2026-05-01
 
 ## Sources
 
 [1] RAPM design — `docs/xg_model_components/06_rapm_on_xg.md`
 [2] Project roadmap — `docs/xg_model_roadmap.md` (Phase 4)
-[3] Player schema — `src/database.py` (`create_player_game_features_table()`, `_FEATURE_SET_VERSION`)
+[3] Player schema and readiness checks — `src/database.py` (`create_player_game_features_table()`, `populate_player_game_features()`, `validate_player_database_readiness()`, `_FEATURE_SET_VERSION`)
 [4] Evolving Hockey WAR — `knowledge_base/raw/external/2026-04-08_evolving-hockey-xg-and-war.md`
 [5] Schuckers & Curro THoR — `knowledge_base/raw/external/2026-04-08_schuckers-curro-thor-digr.md`
 [6] HockeyViz Magnus — `knowledge_base/raw/external/2026-04-08_hockeyviz-magnus-model.md`
@@ -91,5 +91,6 @@ Last verified: 2026-04-07
 
 ## Revision History
 
+- 2026-05-01 — Updated player database status: identity metadata, player-game stats, and feature row coverage are populated; remaining RAPM prerequisites are xG predictions and shift/TOI/on-ice exposure data.
 - 2026-04-08 — Added external RAPM implementations (Evolving Hockey WAR/GAR, Schuckers/Curro THoR, HockeyViz Magnus).
 - 2026-04-07 — Created. Compiled from component 06 (RAPM on xG) design doc, xG roadmap, and database.py player schema.

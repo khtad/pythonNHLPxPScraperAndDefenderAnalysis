@@ -14,8 +14,8 @@ This means `angle_to_goal` alone overstates shot quality for off-wing shots and 
 
 | Item | Status |
 |------|--------|
-| `players.shoots_catches` column | Exists in schema, **not populated** |
-| Player metadata API endpoint | **Does not exist** in `nhl_api.py` |
+| `players.shoots_catches` column | **Populated** via `backfill_player_metadata`; live DB has 100% coverage for players with ≥ 50 career shots |
+| Player metadata API endpoint | **Implemented** as `get_player_metadata(player_id)` in `nhl_api.py` |
 | `shot_events.angle_to_goal` | Geometric only, no handedness adjustment |
 | Off-wing classification | **Not implemented** |
 | Effective angle calculation | **Not implemented** |
@@ -26,11 +26,11 @@ This means `angle_to_goal` alone overstates shot quality for off-wing shots and 
 
 ### Phase B1: Off-wing flag (ship first, let data validate)
 
-1. **Populate `players.shoots_catches`**
-   - Add `get_player_metadata(player_id)` to `nhl_api.py` using the NHL player landing endpoint
-   - Add `upsert_player(conn, player_dict)` to `database.py`
-   - Backfill: scan `shot_events` for distinct `shooter_id` not in `players` and fetch metadata
-   - No `shot_events` version bump (dimension table only)
+1. **Populate `players.shoots_catches`** — complete
+   - `get_player_metadata(player_id)` uses the NHL player landing endpoint
+   - `upsert_player(conn, player_dict)` and `upsert_players(conn, players)` write the `players` dimension
+   - `backfill_player_metadata` scans distinct `shooter_id`/`goalie_id` values in `shot_events`, fetches missing metadata, and caches permanent upstream misses in `player_metadata_unavailable`
+   - No `shot_events` version bump was required because this was a dimension-table update only
 
 2. **Add off-wing classification to `shot_events`**
    - New function `classify_off_wing(y_coord, shoots_catches)` in `xg_features.py`:

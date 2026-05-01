@@ -15,6 +15,7 @@ from database import (create_table, insert_data, create_connection,
                       ensure_player_database_schema,
                       backfill_player_metadata,
                       populate_player_game_stats,
+                      populate_player_game_features,
                       populate_game_context,
                       populate_venue_diagnostics,
                       populate_venue_bias_corrections,
@@ -139,12 +140,12 @@ def finalize_season_diagnostics(conn):
 
 
 def refresh_player_tables(conn):
-    """Backfill player metadata and (re)populate player_game_stats.
+    """Backfill player metadata and refresh derived player tables.
 
     Runs after the scraper/backfill loop: the player-landing endpoint is
     only queried for shooter/goalie ids that are still missing from the
-    players dimension. `populate_player_game_stats` is idempotent by
-    construction (ON CONFLICT DO UPDATE on (player_id, game_id)).
+    players dimension. Player-game stats and features are rebuilt
+    idempotently from the current shot-event foundation.
     """
     attempted, upserted, unavailable = backfill_player_metadata(
         conn, get_player_metadata
@@ -153,9 +154,17 @@ def refresh_player_tables(conn):
         f"Player metadata backfill: attempted={attempted} "
         f"upserted={upserted} unavailable={unavailable}"
     )
-    rows = populate_player_game_stats(conn)
-    print(f"Populated player_game_stats rows={rows}")
-    return attempted, upserted, unavailable, rows
+    stats_rows = populate_player_game_stats(conn)
+    print(f"Populated player_game_stats rows={stats_rows}")
+    feature_rows = populate_player_game_features(conn)
+    print(f"Populated player_game_features rows={feature_rows}")
+    return {
+        "metadata_attempted": attempted,
+        "metadata_upserted": upserted,
+        "metadata_unavailable": unavailable,
+        "player_game_stats_rows": stats_rows,
+        "player_game_features_rows": feature_rows,
+    }
 
 
 def backfill_missing_game_data(limit=None):
