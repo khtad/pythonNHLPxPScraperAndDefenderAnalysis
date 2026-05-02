@@ -1,10 +1,10 @@
 # NHL API Endpoints
 
-> The four NHL Stats API endpoints used by this project: schedule, play-by-play, shift charts, and player landing; their response structure, rate limiting, and known field availability gaps by era.
+> The NHL Web API and Stats REST endpoints used by this project: schedule, play-by-play, player landing, and shift charts; their response structure, rate limiting, and known field availability gaps by era.
 
 ## Overview
 
-This project fetches all data from the NHL Stats API (`api-web.nhle.com/v1`), a public JSON API that provides schedule information and detailed play-by-play event data for NHL games. The API requires no authentication but is rate-limited. Four endpoints are used: the weekly schedule endpoint to discover game IDs, the play-by-play endpoint to fetch detailed event data for each game, the shift charts endpoint to recover on-ice player intervals, and the player landing endpoint to resolve per-player metadata (handedness, position, team).
+This project fetches game, schedule, and player metadata from the NHL Web API (`api-web.nhle.com/v1`) and shift-chart rows from the separate NHL Stats REST API (`api.nhle.com/stats/rest`). These public JSON APIs require no authentication but are rate-limited. Four endpoints are used: the weekly schedule endpoint to discover game IDs, the play-by-play endpoint to fetch detailed event data for each game, the player landing endpoint to resolve per-player metadata (handedness, position, team), and the shift charts endpoint to recover on-ice player intervals.
 
 The API client is implemented in `src/nhl_api.py` using a module-level `requests.Session` for connection reuse, with a configurable minimum interval between game API calls to respect rate limits [1].
 
@@ -75,7 +75,7 @@ These are parsed by `_parse_player_landing()` and written by `upsert_player()` /
 
 | Property | Value |
 |----------|-------|
-| URL pattern | `https://api-web.nhle.com/v1/gamecenter/{game_id}/shiftcharts` |
+| URL pattern | `https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId={game_id}` |
 | Method | GET |
 | Response key | `data` — array of player shift rows |
 | Consumed fields | `playerId`, `teamId`, `period`, `startTime`, `endTime`, optional `duration`, optional position fields |
@@ -98,7 +98,7 @@ Not all fields are available for all seasons. This is the most significant data 
 
 The NHL does not publish official API documentation. Two community-maintained references provide the most complete endpoint catalogs [4]:
 
-- **Zmalski/NHL-API-Reference** (GitHub) — comprehensive catalog for the current `api-web.nhle.com` API
+- **Zmalski/NHL-API-Reference** (GitHub) — comprehensive catalog for the current `api-web.nhle.com` Web API and `api.nhle.com/stats/rest` Stats REST API
 - **dword4/nhlapi** (GitHub/GitLab) — the original community documentation, covering both the legacy `statsapi.web.nhl.com` and the current API
 
 A legacy API base URL (`https://statsapi.web.nhl.com/api/v1/`) was used by many older tools. It has been deprecated in favor of `api-web.nhle.com`. The Stats API (`https://api.nhle.com/stats/rest`) provides aggregate statistics and is a separate platform from the play-by-play Web API.
@@ -113,11 +113,11 @@ A legacy API base URL (`https://statsapi.web.nhl.com/api/v1/`) was used by many 
 
 ## Relevance to This Project
 
-These four endpoints are the sole data source for the entire project. The scraper in `main.py` iterates through every week from 2007-10-03 to the present, fetching game IDs via the schedule endpoint and full event data via the play-by-play endpoint [2]. The player landing endpoint is called after each scraper/backfill pass for every shooter/goalie not yet resolved. The shift charts endpoint powers `shifts`, `on_ice_intervals`, and the `shot_events.home_on_ice_*` / `away_on_ice_*` slot columns [6]. All derived tables (`shot_events`, `games`, `game_context`, `players`, `player_game_stats`, `shifts`, `on_ice_intervals`) are populated from these endpoints [5][6].
+These four endpoints are the sole data source for the entire project. The scraper in `main.py` iterates through every week from 2007-10-03 to the present, fetching game IDs via the Web API schedule endpoint and full event data via the Web API play-by-play endpoint [2]. The Web API player landing endpoint is called after each scraper/backfill pass for every shooter/goalie not yet resolved. The Stats REST shift charts endpoint powers `shifts`, `on_ice_intervals`, and the `shot_events.home_on_ice_*` / `away_on_ice_*` slot columns [6]. All derived tables (`shot_events`, `games`, `game_context`, `players`, `player_game_stats`, `shifts`, `on_ice_intervals`) are populated from these endpoints [5][6].
 
 The `homeTeamDefendingSide` era gap is the project's most significant data quality issue, affecting ~1.3M shots (see [Coordinate System and Normalization](coordinate-system-and-normalization.md) for full details).
 
-Last verified: 2026-05-01
+Last verified: 2026-05-02
 
 ## Sources
 
@@ -136,6 +136,7 @@ Last verified: 2026-05-01
 
 ## Revision History
 
+- 2026-05-02 — Corrected shift charts URL from the Web API gamecenter path to the Stats REST `shiftcharts?cayenneExp=gameId=...` endpoint.
 - 2026-05-01 — Added shift charts endpoint and shift-table population pipeline references.
 - 2026-04-24 — Added transport-exception handling note for `_api_get_with_status()` and refreshed verification date.
 - 2026-04-20 — Added player landing endpoint section (roadmap Phase 2.5.1: player metadata pipeline).

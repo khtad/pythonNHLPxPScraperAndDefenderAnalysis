@@ -1,7 +1,8 @@
 import json
 
+import shifts
 from on_ice_builder import attach_on_ice_slots_to_shots, build_on_ice_intervals
-from shifts import ShiftRecord, parse_shift_rows, validate_shift_records
+from shifts import ShiftRecord, fetch_shift_rows_for_game, parse_shift_rows, validate_shift_records
 
 
 def test_parse_shift_rows_normalizes_clock_strings():
@@ -75,6 +76,23 @@ def test_parse_shift_rows_normalizes_nhl_shift_chart_payload():
             start_seconds=15,
             end_seconds=40,
         ),
+    ]
+
+
+def test_fetch_shift_rows_uses_stats_rest_shiftcharts_endpoint(monkeypatch):
+    captured_urls = []
+
+    def fake_api_get(url):
+        captured_urls.append(url)
+        return {"data": [{"gameId": 2025030176, "playerId": 8478402}]}
+
+    monkeypatch.setattr(shifts, "_api_get", fake_api_get)
+
+    rows = fetch_shift_rows_for_game(2025030176)
+
+    assert rows == [{"gameId": 2025030176, "playerId": 8478402}]
+    assert captured_urls == [
+        "https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId=2025030176"
     ]
 
 

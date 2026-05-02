@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-05-01 (Added shift-chart population pipeline and refreshed on-ice data-source references)
+> Last updated: 2026-05-02 (Corrected shift-chart endpoint to NHL Stats REST)
 
 ## Concepts
 
@@ -28,7 +28,7 @@
 - [Shot Type Taxonomy](wiki/data/shot-type-taxonomy.md) — The 11 recognized shot types, their frequency distribution, and relevance to xG modeling.
 - [Manpower States](wiki/data/manpower-states.md) — The 15 valid skater-count situations parsed from NHL API situation codes.
 - [Score States](wiki/data/score-states.md) — The 7 score-differential buckets and their behavioral effects on shot volume and quality.
-- [NHL API Endpoints](wiki/data/nhl-api-endpoints.md) — Schedule, play-by-play, and player-landing endpoints: response structure, rate limiting, and field availability by era.
+- [NHL API Endpoints](wiki/data/nhl-api-endpoints.md) — Schedule, play-by-play, player-landing, and shift-chart endpoints: response structure, rate limiting, and field availability by era.
 - [Arena and Venue Reference](wiki/data/arena-venue-reference.md) — Static reference data for all 32 current NHL teams: city, timezone, and geographic coordinates.
 
 ## Models

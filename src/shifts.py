@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Iterable, List
 
 from database import _SHIFT_SCHEMA_VERSION
-from nhl_api import _api_get, _NHL_API_BASE_URL
+from nhl_api import _api_get
 
 SHIFT_TIME_DRIFT_TOLERANCE_SECONDS = 1
 SHIFT_SCHEMA_VERSION = _SHIFT_SCHEMA_VERSION
@@ -18,6 +18,9 @@ _DURATION_KEYS = ("duration_seconds", "durationSeconds", "duration")
 _HOME_TEAM_SIDE = "home"
 _AWAY_TEAM_SIDE = "away"
 VALID_SHIFT_TEAM_SIDES = (_HOME_TEAM_SIDE, _AWAY_TEAM_SIDE)
+_NHL_SHIFT_CHARTS_URL_TEMPLATE = (
+    "https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId={game_id}"
+)
 
 
 @dataclass(frozen=True)
@@ -146,7 +149,7 @@ def shift_record_has_resolved_context(record: ShiftRecord) -> bool:
 
 def fetch_shift_rows_for_game(game_id: int) -> list[dict]:
     """Fetch raw shift rows for a single game from NHL shift charts endpoint."""
-    url = f"{_NHL_API_BASE_URL}/gamecenter/{game_id}/shiftcharts"
+    url = _NHL_SHIFT_CHARTS_URL_TEMPLATE.format(game_id=game_id)
     payload = _api_get(url)
     if payload is None:
         return []

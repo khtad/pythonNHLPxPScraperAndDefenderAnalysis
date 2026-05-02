@@ -206,6 +206,14 @@ player-schema bootstrap
      - Do not materialize on-ice intervals from shift rows unless every row needed for the interval builder has resolved team side and position context.
      - When a derived table depends on a fallback dimension such as `players.position`, add a test for rerunning after that fallback data becomes available.
 
+13. **Failure:** Shift population logged 404s for every game because the fetcher called `https://api-web.nhle.com/v1/gamecenter/{game_id}/shiftcharts`, which is not the public shift-chart route.
+   - **Cause:** The implementation assumed shift charts lived under the same `api-web.nhle.com/v1/gamecenter` surface as play-by-play. NHL shift charts are served from the separate Stats REST API at `https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId={game_id}`.
+   - **Fix:** Pointed `fetch_shift_rows_for_game()` at the Stats REST shiftcharts endpoint and added a URL-construction regression test.
+   - **Rules to avoid repeat failures of this type:**
+     - Treat NHL Web API (`api-web.nhle.com/v1`) and Stats REST API (`api.nhle.com/stats/rest`) as distinct endpoint families; do not infer one endpoint path from the other without a source or live verification.
+     - Any new external endpoint helper must have a test that asserts the full URL, including host and query string.
+     - If a newly wired endpoint returns uniform 404s across many valid game IDs, verify the route before treating the payload as missing data.
+
 ## Derived-Data Versioning & Backfill
 
 Each derived table stores a schema version in every row, recording which code version produced it:

@@ -260,3 +260,12 @@
 - Updated `wiki/data/nhl-api-shot-events.md` - documented that on-ice slot columns are populated from shift-chart intervals when available.
 - Updated `index.md` - refreshed Last updated summary.
 **Notes:** The new pipeline normalizes realistic NHL shift-chart payload keys, persists `shifts` and `on_ice_intervals` idempotently, updates `shot_events.home_on_ice_*` / `away_on_ice_*`, exposes `scripts/backfill_shift_data.py --all` for historical population, and reuses the same per-game function from `main.py` for newly processed games. QoT/QoC and RAPM output tables remain later-phase work.
+
+### 2026-05-02 - UPDATE
+
+**Action:** Corrected shift-chart endpoint documentation
+**Source:** `src/shifts.py`, `tests/test_shift_phase1.py`, `CLAUDE.md`
+**Pages touched:**
+- Updated `wiki/data/nhl-api-endpoints.md` - corrected the shift charts URL from the Web API `gamecenter/{game_id}/shiftcharts` route to the NHL Stats REST `shiftcharts?cayenneExp=gameId=...` route.
+- Updated `index.md` - refreshed Last updated summary and endpoint article description.
+**Notes:** Runtime scraper logs showed uniform 404 responses from the old shift-chart URL. The project now documents that schedule, play-by-play, and player landing come from `api-web.nhle.com/v1`, while shift charts come from `api.nhle.com/stats/rest/en`.
