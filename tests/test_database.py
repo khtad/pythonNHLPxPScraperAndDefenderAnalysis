@@ -793,6 +793,34 @@ def test_replace_game_on_ice_intervals_is_idempotent(conn):
 # ── Phase 2.5.1: players upsert / backfill / populate_player_game_stats ─────
 
 
+def test_game_has_current_shift_data_rejects_unresolved_positions(conn):
+    create_shifts_table(conn)
+    create_on_ice_intervals_table(conn)
+    insert_shift_records(conn, [{
+        "game_id": 2025020001,
+        "player_id": 8478402,
+        "team_id": 22,
+        "team_side": "home",
+        "position": None,
+        "period": 1,
+        "start_seconds": 10,
+        "end_seconds": 45,
+    }])
+    replace_game_on_ice_intervals(conn, 2025020001, [{
+        "game_id": 2025020001,
+        "period": 1,
+        "start_s": 10,
+        "end_s": 45,
+        "home_skaters_json": "[8478402]",
+        "away_skaters_json": "[]",
+        "home_goalie_player_id": None,
+        "away_goalie_player_id": None,
+        "strength_state": "1v0",
+    }])
+
+    assert not game_has_current_shift_data(conn, 2025020001)
+
+
 def _player_row(player_id, position="C", team_id=22, shoots="L"):
     return {
         "player_id": player_id,

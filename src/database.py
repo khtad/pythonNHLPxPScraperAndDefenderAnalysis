@@ -49,6 +49,9 @@ _XG_EVENT_SCHEMA_VERSION = "v5"
 _XG_FEATURE_SCHEMA_VERSION = "v1"
 _SHIFT_SCHEMA_VERSION = "v2"
 _ON_ICE_SCHEMA_VERSION = "v1"
+_SHIFT_SIDE_HOME = "home"
+_SHIFT_SIDE_AWAY = "away"
+_VALID_SHIFT_TEAM_SIDES = (_SHIFT_SIDE_HOME, _SHIFT_SIDE_AWAY)
 _MIN_TRAINING_SEASON = "20092010"
 
 # ── xG Phase 0: data-contract constants ──────────────────────────────
@@ -1825,7 +1828,7 @@ def update_shot_event_on_ice_slots(conn, shot_rows, commit=True):
 
 
 def game_has_current_shift_data(conn, game_id):
-    """Return True when shifts and intervals exist at the current versions."""
+    """Return True when current shifts have resolved context and intervals exist."""
     cursor = conn.cursor()
     cursor.execute(
         """SELECT 1
@@ -1836,6 +1839,23 @@ def game_has_current_shift_data(conn, game_id):
         (game_id, _SHIFT_SCHEMA_VERSION),
     )
     if cursor.fetchone() is None:
+        return False
+
+    cursor.execute(
+        """SELECT 1
+           FROM shifts
+           WHERE game_id = ?
+             AND shift_schema_version = ?
+             AND (
+                 position IS NULL
+                 OR position = ''
+                 OR team_side IS NULL
+                 OR team_side NOT IN (?, ?)
+             )
+           LIMIT 1""",
+        (game_id, _SHIFT_SCHEMA_VERSION, *_VALID_SHIFT_TEAM_SIDES),
+    )
+    if cursor.fetchone() is not None:
         return False
 
     cursor.execute(
@@ -1861,6 +1881,18 @@ def get_shift_backfill_game_ids(conn, limit=None):
                WHERE sh.game_id = se.game_id
                  AND sh.shift_schema_version = ?
            )
+              OR EXISTS (
+               SELECT 1
+               FROM shifts sh
+               WHERE sh.game_id = se.game_id
+                 AND sh.shift_schema_version = ?
+                 AND (
+                     sh.position IS NULL
+                     OR sh.position = ''
+                     OR sh.team_side IS NULL
+                     OR sh.team_side NOT IN (?, ?)
+                 )
+           )
               OR NOT EXISTS (
                SELECT 1
                FROM on_ice_intervals oi
@@ -1869,7 +1901,12 @@ def get_shift_backfill_game_ids(conn, limit=None):
            )
            ORDER BY se.game_id"""
     )
-    params = [_SHIFT_SCHEMA_VERSION, _ON_ICE_SCHEMA_VERSION]
+    params = [
+        _SHIFT_SCHEMA_VERSION,
+        _SHIFT_SCHEMA_VERSION,
+        *_VALID_SHIFT_TEAM_SIDES,
+        _ON_ICE_SCHEMA_VERSION,
+    ]
     if limit is not None:
         query += " LIMIT ?"
         params.append(limit)

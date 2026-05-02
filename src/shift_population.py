@@ -18,7 +18,12 @@ from database import (
     update_shot_event_on_ice_slots,
 )
 from on_ice_builder import attach_on_ice_slots_to_shots, build_on_ice_intervals
-from shifts import extract_shift_player_ids, fetch_shift_rows_for_game, parse_shift_rows
+from shifts import (
+    extract_shift_player_ids,
+    fetch_shift_rows_for_game,
+    parse_shift_rows,
+    shift_record_has_resolved_context,
+)
 
 FetchShiftRows = Callable[[int], list[dict]]
 
@@ -50,6 +55,10 @@ def _valid_shift_records(records):
     ]
 
 
+def _has_resolved_shift_context(records):
+    return all(shift_record_has_resolved_context(record) for record in records)
+
+
 def populate_shift_data_for_game(
     conn,
     game_id: int,
@@ -75,6 +84,8 @@ def populate_shift_data_for_game(
         )
     )
     if not shift_records:
+        return ShiftPopulationResult(games_scanned=1, games_skipped=1)
+    if not _has_resolved_shift_context(shift_records):
         return ShiftPopulationResult(games_scanned=1, games_skipped=1)
 
     shift_dicts = [asdict(record) for record in shift_records]

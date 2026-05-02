@@ -198,6 +198,14 @@ player-schema bootstrap
      - Prefer a fresh `--basetemp` value for each rerun after a temp-dir permission failure, and report any generated unreadable temp directories that could not be cleaned up.
      - If pytest reaches test execution but crashes during session cleanup with `PermissionError` on the fresh `--basetemp`, rerun outside the sandbox; sandboxed reruns may keep generating unreadable temp roots even when the code is healthy.
 
+12. **Failure:** Shift-table population could mark a game complete even when shift rows lacked player-position context, causing goalies to be classified as skaters and preventing later reruns from repairing on-ice slots after player metadata became available.
+   - **Cause:** `game_has_current_shift_data` checked only for current-version `shifts` and `on_ice_intervals` rows. It did not verify that current shift rows had resolved `position` and `team_side` values before treating the game as complete.
+   - **Fix:** Treat current shift rows with null/empty `position` or unresolved `team_side` as incomplete, skip new writes when a fetched payload cannot resolve that context, and add regression coverage for recomputing a previously unresolved game after player positions are available.
+   - **Rules to avoid repeat failures of this type:**
+     - Completeness checks for derived data must validate the required semantic context, not just row existence and schema-version columns.
+     - Do not materialize on-ice intervals from shift rows unless every row needed for the interval builder has resolved team side and position context.
+     - When a derived table depends on a fallback dimension such as `players.position`, add a test for rerunning after that fallback data becomes available.
+
 ## Derived-Data Versioning & Backfill
 
 Each derived table stores a schema version in every row, recording which code version produced it:

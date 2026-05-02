@@ -17,6 +17,7 @@ _END_TIME_KEYS = ("end_seconds", "endSeconds", "endTime")
 _DURATION_KEYS = ("duration_seconds", "durationSeconds", "duration")
 _HOME_TEAM_SIDE = "home"
 _AWAY_TEAM_SIDE = "away"
+VALID_SHIFT_TEAM_SIDES = (_HOME_TEAM_SIDE, _AWAY_TEAM_SIDE)
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,10 @@ def _normalize_position(position_value):
         return None
     if isinstance(position_value, dict):
         position_value = position_value.get("code") or position_value.get("default")
-    return str(position_value).upper()
+    normalized_position = str(position_value).upper()
+    if not normalized_position:
+        return None
+    return normalized_position
 
 
 def _team_side(team_id, home_team_id, away_team_id, raw_side):
@@ -133,6 +137,11 @@ def extract_shift_player_ids(raw_rows: Iterable[dict]) -> set[int]:
         except (TypeError, ValueError):
             continue
     return player_ids
+
+
+def shift_record_has_resolved_context(record: ShiftRecord) -> bool:
+    """Return True when a shift has enough context for goalie-aware intervals."""
+    return record.position is not None and record.team_side in VALID_SHIFT_TEAM_SIDES
 
 
 def fetch_shift_rows_for_game(game_id: int) -> list[dict]:

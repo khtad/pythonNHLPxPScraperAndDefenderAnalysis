@@ -3,10 +3,12 @@ import sqlite3
 from database import (
     ensure_player_database_schema,
     ensure_xg_schema,
+    game_has_current_shift_data,
     insert_shift_records,
     insert_shot_events,
     replace_game_on_ice_intervals,
     upsert_game_metadata,
+    upsert_player,
 )
 from shift_population import populate_shift_data_for_game, select_shift_backfill_game_ids
 
@@ -77,6 +79,54 @@ def _full_shift_payload(game_id):
     return rows
 
 
+def _positionless_shift_payload(game_id):
+    rows = []
+    for player_id in [1, 2, 3, 4, 5, 30]:
+        rows.append({
+            "gameId": game_id,
+            "playerId": player_id,
+            "teamId": 22,
+            "period": 1,
+            "startTime": "00:00",
+            "endTime": "00:40",
+        })
+    for player_id in [11, 12, 13, 14, 15, 40]:
+        rows.append({
+            "gameId": game_id,
+            "playerId": player_id,
+            "teamId": 10,
+            "period": 1,
+            "startTime": "00:00",
+            "endTime": "00:40",
+        })
+    return rows
+
+
+def _seed_player_positions(connection):
+    for player_id, position, team_id in [
+        (1, "C", 22),
+        (2, "L", 22),
+        (3, "R", 22),
+        (4, "D", 22),
+        (5, "D", 22),
+        (30, "G", 22),
+        (11, "C", 10),
+        (12, "L", 10),
+        (13, "R", 10),
+        (14, "D", 10),
+        (15, "D", 10),
+        (40, "G", 10),
+    ]:
+        upsert_player(connection, {
+            "player_id": player_id,
+            "first_name": f"First{player_id}",
+            "last_name": f"Last{player_id}",
+            "shoots_catches": None,
+            "position": position,
+            "team_id": team_id,
+        })
+
+
 def test_populate_shift_data_for_game_persists_intervals_and_updates_shots():
     connection = _conn()
     game_id = 2025020001
@@ -119,6 +169,74 @@ def test_populate_shift_data_for_game_persists_intervals_and_updates_shots():
     assert second_result.games_skipped == 1
     cur.execute("SELECT COUNT(*) FROM shifts WHERE game_id = ?", (game_id,))
     assert cur.fetchone()[0] == 12
+
+
+def test_populate_shift_data_for_game_skips_unresolved_positions():
+    connection = _conn()
+    game_id = 2025020001
+    _seed_game(connection, game_id)
+
+    result = populate_shift_data_for_game(
+        connection,
+        game_id,
+        fetch_fn=lambda shifted_game_id: _positionless_shift_payload(shifted_game_id),
+    )
+
+    assert result.games_scanned == 1
+    assert result.games_skipped == 1
+    assert not game_has_current_shift_data(connection, game_id)
+
+    cur = connection.cursor()
+    cur.execute("SELECT COUNT(*) FROM shifts WHERE game_id = ?", (game_id,))
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT COUNT(*) FROM on_ice_intervals WHERE game_id = ?", (game_id,))
+    assert cur.fetchone()[0] == 0
+
+
+def test_populate_shift_data_recomputes_unresolved_shift_positions():
+    connection = _conn()
+    game_id = 2025020001
+    _seed_game(connection, game_id)
+    insert_shift_records(connection, [{
+        "game_id": game_id,
+        "player_id": 30,
+        "team_id": 22,
+        "team_side": "home",
+        "position": None,
+        "period": 1,
+        "start_seconds": 0,
+        "end_seconds": 40,
+    }])
+    replace_game_on_ice_intervals(connection, game_id, [{
+        "game_id": game_id,
+        "period": 1,
+        "start_s": 0,
+        "end_s": 40,
+        "home_skaters_json": "[30]",
+        "away_skaters_json": "[]",
+        "home_goalie_player_id": None,
+        "away_goalie_player_id": None,
+        "strength_state": "1v0",
+    }])
+    assert not game_has_current_shift_data(connection, game_id)
+
+    _seed_player_positions(connection)
+    result = populate_shift_data_for_game(
+        connection,
+        game_id,
+        fetch_fn=lambda shifted_game_id: _positionless_shift_payload(shifted_game_id),
+    )
+
+    assert result.games_populated == 1
+    cur = connection.cursor()
+    cur.execute(
+        """SELECT home_on_ice_6_player_id, away_on_ice_6_player_id
+           FROM shot_events
+           WHERE game_id = ?""",
+        (game_id,),
+    )
+    assert cur.fetchone() == (30, 40)
+    assert game_has_current_shift_data(connection, game_id)
 
 
 def test_select_shift_backfill_game_ids_respects_game_id_and_limit():
