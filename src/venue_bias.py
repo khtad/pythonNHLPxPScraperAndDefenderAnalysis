@@ -36,6 +36,21 @@ EVENT_FREQUENCY_BOOTSTRAP_SAMPLES = 10_000
 EVENT_FREQUENCY_BOOTSTRAP_ALPHA = 0.05
 EVENT_FREQUENCY_BOOTSTRAP_SEED = 42
 
+VENUE_REGIME_METRIC_DISTANCE = "distance_location"
+VENUE_REGIME_METRIC_EVENT_FREQUENCY = "event_frequency"
+VENUE_REGIME_RESIDUAL_FIELD = "residual_z_score"
+VENUE_REGIME_ROLLING_WINDOW_SEASONS = 3
+VENUE_REGIME_CENTERED_WINDOW_RADIUS = 1
+VENUE_REGIME_PERSISTENT_MIN_SEASONS = 2
+VENUE_REGIME_MAX_ANOMALOUS_POPULATION_SHARE = 0.2
+
+VENUE_REGIME_NOT_FLAGGED = "not_flagged"
+VENUE_REGIME_PERSISTENT_BIAS = "persistent_bias"
+VENUE_REGIME_TEMPORARY_SUPPORTED = "temporary_supported_regime"
+VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED = "unexplained_or_confounded"
+VENUE_REGIME_INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+VENUE_REGIME_POPULATION_SHIFT = "population_shift_detected"
+
 ANOMALY_NOT_FLAGGED = "not_flagged"
 ANOMALY_CALCULATION_ERROR_SUSPECTED = "calculation_error_suspected"
 ANOMALY_REAL_SCOREKEEPER_REGIME_SUPPORTED = "real_scorekeeper_regime_supported"
@@ -249,6 +264,262 @@ def primary_event_frequency_residual_z_scores(
     return result
 
 
+def residual_z_score_rows(
+    residual_z_scores: Mapping[str, float],
+    metric_name: str,
+) -> list[dict[str, Any]]:
+    """Convert ``season:venue`` z-score mappings into regime diagnostic rows."""
+    rows: list[dict[str, Any]] = []
+    for venue_season, z_score in residual_z_scores.items():
+        season, venue_name = _split_venue_season_label(str(venue_season))
+        rows.append(
+            {
+                "metric_name": metric_name,
+                "season": season,
+                "venue_name": venue_name,
+                VENUE_REGIME_RESIDUAL_FIELD: float(z_score),
+                "sample_adequate": True,
+                "evidence_supports_regime": False,
+                "known_scorekeeper_prior": bool(
+                    KNOWN_SCOREKEEPER_REGIME_NOTES.get(venue_name, "")
+                ),
+            }
+        )
+    return rows
+
+
+def compute_prior_rolling_bias_estimates(
+    residual_rows: Sequence[Mapping[str, Any]],
+    value_field: str = VENUE_REGIME_RESIDUAL_FIELD,
+    sample_size_field: str | None = None,
+    window_seasons: int = VENUE_REGIME_ROLLING_WINDOW_SEASONS,
+) -> list[dict[str, Any]]:
+    """Add prior-only rolling bias estimates by venue.
+
+    The estimate for season ``t`` only uses earlier rows for the same venue,
+    making it safe for production correction policies that cannot see the
+    current or future season.
+    """
+    if window_seasons <= 0:
+        raise ValueError("window_seasons must be positive.")
+
+    enriched_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for venue_name, rows in _rows_grouped_by_venue(residual_rows).items():
+        history: list[Mapping[str, Any]] = []
+        for row in rows:
+            eligible_history = _eligible_bias_rows(history, value_field)
+            window_history = eligible_history[-window_seasons:]
+            item = dict(row)
+            item["prior_rolling_bias"] = _weighted_mean(
+                window_history,
+                value_field,
+                sample_size_field,
+            )
+            item["prior_rolling_observation_count"] = len(window_history)
+            item["prior_rolling_window_seasons"] = window_seasons
+            item["prior_rolling_uses_future"] = False
+            enriched_by_key[_regime_row_key(item, venue_name)] = item
+            history.append(row)
+    return _sort_regime_rows(enriched_by_key.values())
+
+
+def compute_centered_rolling_bias_estimates(
+    residual_rows: Sequence[Mapping[str, Any]],
+    value_field: str = VENUE_REGIME_RESIDUAL_FIELD,
+    sample_size_field: str | None = None,
+    window_radius: int = VENUE_REGIME_CENTERED_WINDOW_RADIUS,
+) -> list[dict[str, Any]]:
+    """Add centered rolling bias estimates for exploratory diagnostics.
+
+    Centered estimates can use surrounding future seasons and must not feed a
+    production correction. They are useful for identifying temporary historical
+    regimes that later return toward baseline.
+    """
+    if window_radius < 0:
+        raise ValueError("window_radius must be non-negative.")
+
+    enriched_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for venue_name, rows in _rows_grouped_by_venue(residual_rows).items():
+        for index, row in enumerate(rows):
+            window_start = max(0, index - window_radius)
+            window_end = min(len(rows), index + window_radius + 1)
+            window_rows = _eligible_bias_rows(
+                rows[window_start:window_end],
+                value_field,
+            )
+            item = dict(row)
+            item["centered_rolling_bias"] = _weighted_mean(
+                window_rows,
+                value_field,
+                sample_size_field,
+            )
+            item["centered_rolling_observation_count"] = len(window_rows)
+            item["centered_rolling_window_radius"] = window_radius
+            item["centered_rolling_uses_future"] = window_end > index + 1
+            enriched_by_key[_regime_row_key(item, venue_name)] = item
+    return _sort_regime_rows(enriched_by_key.values())
+
+
+def classify_rolling_venue_regimes(
+    residual_rows: Sequence[Mapping[str, Any]],
+    z_score_threshold: float = EVENT_FREQUENCY_Z_SCORE_THRESHOLD,
+    max_population_anomaly_share: float = (
+        VENUE_REGIME_MAX_ANOMALOUS_POPULATION_SHARE
+    ),
+    persistent_min_seasons: int = VENUE_REGIME_PERSISTENT_MIN_SEASONS,
+) -> list[dict[str, Any]]:
+    """Classify venue-season residuals into rolling scorer-regime labels."""
+    if z_score_threshold <= 0:
+        raise ValueError("z_score_threshold must be positive.")
+    if persistent_min_seasons <= 0:
+        raise ValueError("persistent_min_seasons must be positive.")
+
+    prior_rows = compute_prior_rolling_bias_estimates(residual_rows)
+    rows = compute_centered_rolling_bias_estimates(prior_rows)
+    population_shares = _population_anomaly_shares(rows, z_score_threshold)
+    directional_counts = _local_directional_candidate_counts(
+        rows,
+        z_score_threshold,
+    )
+
+    classified: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        z_score = _finite_float_or_none(item.get(VENUE_REGIME_RESIDUAL_FIELD))
+        candidate = bool(
+            z_score is not None and abs(z_score) >= z_score_threshold
+        )
+        sample_adequate = bool(item.get("sample_adequate", True))
+        population_share = population_shares.get(str(item["season"]))
+        same_direction_count = directional_counts.get(_regime_row_key(item), 0)
+
+        item["candidate_regime"] = candidate
+        item["population_anomaly_share"] = population_share
+        item["max_allowed_population_anomaly_share"] = (
+            max_population_anomaly_share
+        )
+        item["same_direction_candidate_seasons"] = same_direction_count
+        item["regime_classification"] = _classify_regime_row(
+            item,
+            z_score,
+            candidate,
+            sample_adequate,
+            population_share,
+            max_population_anomaly_share,
+            persistent_min_seasons,
+            same_direction_count,
+        )
+        classified.append(item)
+    return _sort_regime_rows(classified)
+
+
+def primary_event_frequency_regime_diagnostics(
+    annotated_diagnostics: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return rolling-regime diagnostics for the primary frequency gate."""
+    rows: list[dict[str, Any]] = []
+    for row in annotated_diagnostics:
+        if row["game_type_scope"] != PRIMARY_EVENT_FREQUENCY_SCOPE:
+            continue
+        if row["event_group"] != PRIMARY_EVENT_FREQUENCY_GROUP:
+            continue
+        if not row.get("sample_adequate"):
+            continue
+        z_score = _finite_float_or_none(row.get("frequency_z_score"))
+        if z_score is None:
+            continue
+        rows.append(
+            {
+                "metric_name": VENUE_REGIME_METRIC_EVENT_FREQUENCY,
+                "season": str(row["season"]),
+                "venue_name": str(row["venue_name"]),
+                VENUE_REGIME_RESIDUAL_FIELD: z_score,
+                "sample_adequate": bool(row.get("sample_adequate")),
+                "evidence_supports_regime": bool(
+                    row.get("anomaly_classification")
+                    == ANOMALY_REAL_SCOREKEEPER_REGIME_SUPPORTED
+                ),
+                "known_scorekeeper_prior": bool(
+                    row.get("known_scorekeeper_prior", False)
+                ),
+                "anomaly_classification": row.get("anomaly_classification"),
+                "paired_mean_diff_per_game": row.get("paired_mean_diff_per_game"),
+                "paired_bootstrap_ci_low": row.get("paired_bootstrap_ci_low"),
+                "paired_bootstrap_ci_high": row.get("paired_bootstrap_ci_high"),
+                "paired_cohens_d": row.get("paired_cohens_d"),
+            }
+        )
+    return classify_rolling_venue_regimes(rows)
+
+
+def summarize_venue_regime_counts(
+    regime_diagnostics: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    """Count regime classifications for a diagnostic row set."""
+    counts = {
+        VENUE_REGIME_NOT_FLAGGED: 0,
+        VENUE_REGIME_PERSISTENT_BIAS: 0,
+        VENUE_REGIME_TEMPORARY_SUPPORTED: 0,
+        VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED: 0,
+        VENUE_REGIME_INSUFFICIENT_EVIDENCE: 0,
+        VENUE_REGIME_POPULATION_SHIFT: 0,
+    }
+    for row in regime_diagnostics:
+        label = str(row.get("regime_classification", VENUE_REGIME_NOT_FLAGGED))
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def top_venue_regime_diagnostics(
+    regime_diagnostics: Sequence[Mapping[str, Any]],
+    limit: int = 10,
+    candidates_only: bool = True,
+) -> list[dict[str, Any]]:
+    """Return the largest rolling-regime residuals for artifact display."""
+    rows = [
+        dict(row)
+        for row in regime_diagnostics
+        if _finite_float_or_none(row.get(VENUE_REGIME_RESIDUAL_FIELD)) is not None
+        and (not candidates_only or row.get("candidate_regime"))
+    ]
+    rows.sort(
+        key=lambda row: abs(float(row[VENUE_REGIME_RESIDUAL_FIELD])),
+        reverse=True,
+    )
+    return [
+        {
+            "metric_name": row.get("metric_name", "unspecified"),
+            "season": row["season"],
+            "venue_name": row["venue_name"],
+            VENUE_REGIME_RESIDUAL_FIELD: row[VENUE_REGIME_RESIDUAL_FIELD],
+            "regime_classification": row.get(
+                "regime_classification",
+                VENUE_REGIME_NOT_FLAGGED,
+            ),
+            "prior_rolling_bias": row.get("prior_rolling_bias"),
+            "centered_rolling_bias": row.get("centered_rolling_bias"),
+            "centered_rolling_uses_future": row.get(
+                "centered_rolling_uses_future",
+                False,
+            ),
+            "population_anomaly_share": row.get("population_anomaly_share"),
+            "same_direction_candidate_seasons": row.get(
+                "same_direction_candidate_seasons",
+                0,
+            ),
+            "evidence_supports_regime": row.get(
+                "evidence_supports_regime",
+                False,
+            ),
+            "known_scorekeeper_prior": row.get(
+                "known_scorekeeper_prior",
+                False,
+            ),
+        }
+        for row in rows[:limit]
+    ]
+
+
 def top_event_frequency_anomalies(
     annotated_diagnostics: Sequence[Mapping[str, Any]],
     limit: int = 10,
@@ -412,3 +683,185 @@ def _paired_evidence_supports_z_score(row: Mapping[str, Any]) -> bool:
     if z_score > 0:
         return bool(float(ci_low) > 0)
     return bool(float(ci_high) < 0)
+
+
+def _split_venue_season_label(label: str) -> tuple[str, str]:
+    if ":" not in label:
+        raise ValueError("Residual labels must use the 'season:venue' format.")
+    season, venue_name = label.split(":", 1)
+    return season, venue_name
+
+
+def _rows_grouped_by_venue(
+    residual_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in residual_rows:
+        grouped[str(row["venue_name"])].append(dict(row))
+    for rows in grouped.values():
+        rows.sort(key=lambda item: str(item["season"]))
+    return grouped
+
+
+def _sort_regime_rows(
+    rows: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    return sorted(
+        [dict(row) for row in rows],
+        key=lambda item: (
+            str(item.get("metric_name", "")),
+            str(item["season"]),
+            str(item["venue_name"]),
+        ),
+    )
+
+
+def _regime_row_key(
+    row: Mapping[str, Any],
+    venue_name: str | None = None,
+) -> tuple[str, str, str]:
+    return (
+        str(row.get("metric_name", "")),
+        str(row["season"]),
+        str(venue_name if venue_name is not None else row["venue_name"]),
+    )
+
+
+def _eligible_bias_rows(
+    rows: Sequence[Mapping[str, Any]],
+    value_field: str,
+) -> list[Mapping[str, Any]]:
+    return [
+        row
+        for row in rows
+        if bool(row.get("sample_adequate", True))
+        and _finite_float_or_none(row.get(value_field)) is not None
+    ]
+
+
+def _weighted_mean(
+    rows: Sequence[Mapping[str, Any]],
+    value_field: str,
+    sample_size_field: str | None,
+) -> float | None:
+    if not rows:
+        return None
+    values = np.asarray([float(row[value_field]) for row in rows], dtype=float)
+    if sample_size_field is None:
+        return float(values.mean())
+
+    weights = np.asarray(
+        [
+            max(float(row.get(sample_size_field) or 0.0), 0.0)
+            for row in rows
+        ],
+        dtype=float,
+    )
+    if float(weights.sum()) <= 0.0:
+        return float(values.mean())
+    return float(np.average(values, weights=weights))
+
+
+def _population_anomaly_shares(
+    rows: Sequence[Mapping[str, Any]],
+    z_score_threshold: float,
+) -> dict[str, float]:
+    counts_by_season: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for row in rows:
+        if not bool(row.get("sample_adequate", True)):
+            continue
+        z_score = _finite_float_or_none(row.get(VENUE_REGIME_RESIDUAL_FIELD))
+        if z_score is None:
+            continue
+        counts = counts_by_season[str(row["season"])]
+        counts[0] += 1
+        if abs(z_score) >= z_score_threshold:
+            counts[1] += 1
+    return {
+        season: anomaly_count / total_count
+        for season, (total_count, anomaly_count) in counts_by_season.items()
+        if total_count > 0
+    }
+
+
+def _local_directional_candidate_counts(
+    rows: Sequence[Mapping[str, Any]],
+    z_score_threshold: float,
+) -> dict[tuple[str, str, str], int]:
+    counts: dict[tuple[str, str, str], int] = {}
+    for venue_name, venue_rows in _rows_grouped_by_venue(rows).items():
+        for row in venue_rows:
+            z_score = _finite_float_or_none(row.get(VENUE_REGIME_RESIDUAL_FIELD))
+            if z_score is None:
+                counts[_regime_row_key(row, venue_name)] = 0
+                continue
+            season_year = _season_start_year(str(row["season"]))
+            local_count = 0
+            for neighbor in venue_rows:
+                neighbor_year = _season_start_year(str(neighbor["season"]))
+                if (
+                    abs(neighbor_year - season_year)
+                    > VENUE_REGIME_CENTERED_WINDOW_RADIUS
+                ):
+                    continue
+                if not bool(neighbor.get("sample_adequate", True)):
+                    continue
+                neighbor_z_score = _finite_float_or_none(
+                    neighbor.get(VENUE_REGIME_RESIDUAL_FIELD)
+                )
+                if neighbor_z_score is None:
+                    continue
+                if abs(neighbor_z_score) < z_score_threshold:
+                    continue
+                if _direction(neighbor_z_score) != _direction(z_score):
+                    continue
+                local_count += 1
+            counts[_regime_row_key(row, venue_name)] = local_count
+    return counts
+
+
+def _classify_regime_row(
+    row: Mapping[str, Any],
+    z_score: float | None,
+    candidate: bool,
+    sample_adequate: bool,
+    population_share: float | None,
+    max_population_anomaly_share: float,
+    persistent_min_seasons: int,
+    same_direction_count: int,
+) -> str:
+    if not candidate:
+        return VENUE_REGIME_NOT_FLAGGED
+    if z_score is None:
+        return VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED
+    if not sample_adequate:
+        return VENUE_REGIME_INSUFFICIENT_EVIDENCE
+    if (
+        population_share is not None
+        and population_share > max_population_anomaly_share
+    ):
+        return VENUE_REGIME_POPULATION_SHIFT
+    if same_direction_count >= persistent_min_seasons:
+        return VENUE_REGIME_PERSISTENT_BIAS
+    if bool(row.get("evidence_supports_regime", False)):
+        return VENUE_REGIME_TEMPORARY_SUPPORTED
+    return VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED
+
+
+def _finite_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    value_float = float(value)
+    if not np.isfinite(value_float):
+        return None
+    return value_float
+
+
+def _direction(value: float) -> int:
+    if value >= 0.0:
+        return 1
+    return -1
+
+
+def _season_start_year(season: str) -> int:
+    return int(str(season)[:4])

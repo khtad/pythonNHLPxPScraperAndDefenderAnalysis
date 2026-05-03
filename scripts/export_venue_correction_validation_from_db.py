@@ -59,10 +59,15 @@ from venue_bias import (  # noqa: E402
     PRIMARY_EVENT_FREQUENCY_GROUP,
     PRIMARY_EVENT_FREQUENCY_SCOPE,
     annotate_event_frequency_anomalies,
+    classify_rolling_venue_regimes,
     compute_event_frequency_diagnostics,
     compute_paired_away_frequency_comparisons,
     primary_event_frequency_residual_z_scores,
+    primary_event_frequency_regime_diagnostics,
+    residual_z_score_rows,
     top_event_frequency_anomalies,
+    top_venue_regime_diagnostics,
+    VENUE_REGIME_METRIC_DISTANCE,
 )
 
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "nhl_data.db"
@@ -516,6 +521,15 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
         f"{len(residual_z_scores):,} residual venue-season z-scores.",
         run_started_at,
     )
+    distance_regime_diagnostics = classify_rolling_venue_regimes(
+        residual_z_score_rows(
+            residual_z_scores,
+            VENUE_REGIME_METRIC_DISTANCE,
+        )
+    )
+    frequency_regime_diagnostics = primary_event_frequency_regime_diagnostics(
+        annotated_frequency
+    )
     metrics = evaluate_venue_correction_scorecard(
         y_true,
         baseline_prob,
@@ -523,6 +537,8 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
         is_home,
         residual_z_scores,
         frequency_residual_z_scores,
+        distance_regime_diagnostics=distance_regime_diagnostics,
+        event_frequency_regime_diagnostics=frequency_regime_diagnostics,
     )
     metrics["correction_method"] = f"{correction_method} (latest prior-season only)"
     metrics["training_snapshot"] = (
@@ -534,10 +550,13 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
         "Each shot uses the latest venue distance adjustment from a season before "
         "the shot's season; same-season venue corrections are not used for holdout "
         "rows. Distance residual z-scores are venue-season corrected-distance mean "
-        "z-scores. Event-frequency residual z-scores use sample-adequate "
-        "regular-season training attempts as the primary gate; blocked-shot and "
-        "all-attempt frequencies are reported as diagnostics and remain outside "
-        "the current shot-level xG training contract."
+        "z-scores. Rolling venue-regime diagnostics use prior-only rolling "
+        "estimates for production-safe context and centered rolling estimates only "
+        "for exploratory historical-spike labeling. Event-frequency residual "
+        "z-scores use sample-adequate regular-season training attempts as the "
+        "primary gate; blocked-shot and all-attempt frequencies are reported as "
+        "diagnostics and remain outside the current shot-level xG training "
+        "contract."
     )
     metrics["event_frequency_primary_scope"] = PRIMARY_EVENT_FREQUENCY_SCOPE
     metrics["event_frequency_primary_group"] = PRIMARY_EVENT_FREQUENCY_GROUP
@@ -546,6 +565,16 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
     metrics["event_frequency_top_anomalies"] = top_event_frequency_anomalies(
         annotated_frequency,
         limit=EVENT_FREQUENCY_REPORT_LIMIT,
+    )
+    metrics["distance_top_regime_diagnostics"] = top_venue_regime_diagnostics(
+        distance_regime_diagnostics,
+        limit=EVENT_FREQUENCY_REPORT_LIMIT,
+    )
+    metrics["event_frequency_top_regime_diagnostics"] = (
+        top_venue_regime_diagnostics(
+            frequency_regime_diagnostics,
+            limit=EVENT_FREQUENCY_REPORT_LIMIT,
+        )
     )
     return metrics
 
