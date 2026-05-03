@@ -59,6 +59,8 @@ VENUE_CORRECTION_MAX_ABS_RESIDUAL_Z_SCORE = 2.0
 VENUE_CORRECTION_MAX_ABS_EVENT_FREQUENCY_Z_SCORE = 2.0
 _VENUE_CORRECTION_MIN_BASELINE_ADVANTAGE = 1e-9
 _VENUE_CORRECTION_LOG_LOSS_TOLERANCE = 1e-12
+_VENUE_REGIME_RESIDUAL_Z_SCORE_MATCH_ATOL = 1e-9
+_VENUE_REGIME_RESIDUAL_Z_SCORE_MATCH_RTOL = 1e-9
 _VENUE_REGIME_GATE_MODE_MAX_Z = "max_z"
 _VENUE_REGIME_GATE_MODE_REGIME_AWARE = "regime_aware"
 _VENUE_REGIME_NON_BLOCKING_LABELS = {
@@ -645,10 +647,10 @@ def _evaluate_residual_regime_gate(
         }
 
     regime_rows = [dict(row) for row in regime_diagnostics]
-    residual_labels = {label for label, _ in residual_items}
+    residual_lookup = dict(residual_items)
     gate_regime_rows = [
         row for row in regime_rows
-        if _regime_diagnostic_label(row) in residual_labels
+        if _regime_row_matches_current_residual(row, residual_lookup)
     ]
     missing_candidate_rows = _missing_residual_candidate_regime_rows(
         residual_items,
@@ -669,8 +671,7 @@ def _evaluate_residual_regime_gate(
         "n_supported_regimes": int(
             sum(
                 1
-                for row in regime_rows
-                if _regime_diagnostic_label(row) in residual_labels
+                for row in gate_regime_rows
                 if row.get("regime_classification")
                 in _VENUE_REGIME_NON_BLOCKING_LABELS
                 and _is_residual_gate_candidate(row, max_abs_z_score)
@@ -679,8 +680,7 @@ def _evaluate_residual_regime_gate(
         "n_persistent_regimes": int(
             sum(
                 1
-                for row in regime_rows
-                if _regime_diagnostic_label(row) in residual_labels
+                for row in gate_regime_rows
                 if row.get("regime_classification") == VENUE_REGIME_PERSISTENT_BIAS
                 and _is_residual_gate_candidate(row, max_abs_z_score)
             )
@@ -688,8 +688,7 @@ def _evaluate_residual_regime_gate(
         "n_temporary_supported_regimes": int(
             sum(
                 1
-                for row in regime_rows
-                if _regime_diagnostic_label(row) in residual_labels
+                for row in gate_regime_rows
                 if row.get("regime_classification") == VENUE_REGIME_TEMPORARY_SUPPORTED
                 and _is_residual_gate_candidate(row, max_abs_z_score)
             )
@@ -766,6 +765,26 @@ def _compact_blocking_regimes(
 
 def _regime_diagnostic_label(row: Mapping[str, Any]) -> str:
     return f"{row.get('season')}:{row.get('venue_name')}"
+
+
+def _regime_row_matches_current_residual(
+    row: Mapping[str, Any],
+    residual_lookup: Mapping[str, float],
+) -> bool:
+    label = _regime_diagnostic_label(row)
+    if label not in residual_lookup:
+        return False
+    row_z_score = float(row.get("residual_z_score", np.nan))
+    residual_z_score = float(residual_lookup[label])
+    return bool(
+        np.isfinite(row_z_score)
+        and np.isclose(
+            row_z_score,
+            residual_z_score,
+            atol=_VENUE_REGIME_RESIDUAL_Z_SCORE_MATCH_ATOL,
+            rtol=_VENUE_REGIME_RESIDUAL_Z_SCORE_MATCH_RTOL,
+        )
+    )
 
 
 def _residual_item_to_missing_regime_row(
