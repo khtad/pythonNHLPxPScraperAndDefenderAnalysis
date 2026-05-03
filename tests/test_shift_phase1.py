@@ -1,7 +1,8 @@
 import json
 
+import shifts
 from on_ice_builder import attach_on_ice_slots_to_shots, build_on_ice_intervals
-from shifts import ShiftRecord, parse_shift_rows, validate_shift_records
+from shifts import ShiftRecord, fetch_shift_rows_for_game, parse_shift_rows, validate_shift_records
 
 
 def test_parse_shift_rows_normalizes_clock_strings():
@@ -24,6 +25,74 @@ def test_parse_shift_rows_normalizes_clock_strings():
             start_seconds=10,
             end_seconds=35,
         )
+    ]
+
+
+def test_parse_shift_rows_normalizes_nhl_shift_chart_payload():
+    raw_rows = [
+        {
+            "playerId": "8478402",
+            "teamId": "22",
+            "period": "1",
+            "startTime": "00:10",
+            "endTime": "00:35",
+            "positionCode": "c",
+        },
+        {
+            "playerId": "8479977",
+            "teamId": "10",
+            "period": "1",
+            "startTime": "00:15",
+            "duration": "00:25",
+        },
+    ]
+
+    records = parse_shift_rows(
+        game_id=2025020001,
+        raw_rows=raw_rows,
+        home_team_id=22,
+        away_team_id=10,
+        player_positions={8479977: "g"},
+    )
+
+    assert records == [
+        ShiftRecord(
+            game_id=2025020001,
+            player_id=8478402,
+            team_id=22,
+            team_side="home",
+            position="C",
+            period=1,
+            start_seconds=10,
+            end_seconds=35,
+        ),
+        ShiftRecord(
+            game_id=2025020001,
+            player_id=8479977,
+            team_id=10,
+            team_side="away",
+            position="G",
+            period=1,
+            start_seconds=15,
+            end_seconds=40,
+        ),
+    ]
+
+
+def test_fetch_shift_rows_uses_stats_rest_shiftcharts_endpoint(monkeypatch):
+    captured_urls = []
+
+    def fake_api_get(url):
+        captured_urls.append(url)
+        return {"data": [{"gameId": 2025030176, "playerId": 8478402}]}
+
+    monkeypatch.setattr(shifts, "_api_get", fake_api_get)
+
+    rows = fetch_shift_rows_for_game(2025030176)
+
+    assert rows == [{"gameId": 2025030176, "playerId": 8478402}]
+    assert captured_urls == [
+        "https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId=2025030176"
     ]
 
 

@@ -5,6 +5,7 @@ import pytest
 
 from database import (
     _FEATURE_SET_VERSION,
+    _SHIFT_SCHEMA_VERSION,
     _XG_EVENT_SCHEMA_VERSION,
     _quote_identifier,
     PlayerMetadataNotFound,
@@ -22,8 +23,10 @@ from database import (
     deduplicate_existing_tables,
     fix_incomplete_collection_log,
     get_last_collected_date,
+    game_has_current_shift_data,
     get_missing_player_ids,
     get_random_game_id,
+    insert_shift_records,
     insert_data,
     delete_game_shot_events,
     insert_shot_events,
@@ -35,6 +38,7 @@ from database import (
     mark_players_metadata_unavailable,
     populate_player_game_features,
     populate_player_game_stats,
+    replace_game_on_ice_intervals,
     upsert_game_metadata,
     upsert_player,
     upsert_players,
@@ -684,7 +688,62 @@ def test_create_shifts_table_creates_expected_columns(conn):
     cur = conn.cursor()
     cur.execute("PRAGMA table_info(shifts)")
     cols = [row[1] for row in cur.fetchall()]
+    assert "team_id" in cols
+    assert "team_side" in cols
+    assert "position" in cols
     assert "shift_schema_version" in cols
+
+
+def test_insert_shift_records_is_idempotent(conn):
+    create_shifts_table(conn)
+    shift = {
+        "game_id": 2025020001,
+        "player_id": 8478402,
+        "team_id": 22,
+        "team_side": "home",
+        "position": "C",
+        "period": 1,
+        "start_seconds": 10,
+        "end_seconds": 45,
+    }
+
+    assert insert_shift_records(conn, [shift]) == 1
+    assert insert_shift_records(conn, [shift]) == 0
+
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM shifts")
+    assert cur.fetchone()[0] == 1
+
+
+def test_insert_shift_records_updates_existing_context(conn):
+    create_shifts_table(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO shifts
+           (game_id, player_id, period, start_seconds, end_seconds, shift_schema_version)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (2025020001, 8478402, 1, 10, 45, "v1"),
+    )
+    shift = {
+        "game_id": 2025020001,
+        "player_id": 8478402,
+        "team_id": 22,
+        "team_side": "home",
+        "position": "C",
+        "period": 1,
+        "start_seconds": 10,
+        "end_seconds": 45,
+    }
+
+    assert insert_shift_records(conn, [shift]) == 0
+
+    cur.execute(
+        """SELECT team_id, team_side, position, shift_schema_version
+           FROM shifts
+           WHERE game_id = ? AND player_id = ?""",
+        (2025020001, 8478402),
+    )
+    assert cur.fetchone() == (22, "home", "C", _SHIFT_SCHEMA_VERSION)
 
 
 def test_create_on_ice_intervals_table_creates_expected_columns(conn):
@@ -696,7 +755,70 @@ def test_create_on_ice_intervals_table_creates_expected_columns(conn):
     assert "away_skaters_json" in cols
 
 
+def test_replace_game_on_ice_intervals_is_idempotent(conn):
+    create_shifts_table(conn)
+    create_on_ice_intervals_table(conn)
+    shift = {
+        "game_id": 2025020001,
+        "player_id": 8478402,
+        "team_id": 22,
+        "team_side": "home",
+        "position": "C",
+        "period": 1,
+        "start_seconds": 10,
+        "end_seconds": 45,
+    }
+    interval = {
+        "game_id": 2025020001,
+        "period": 1,
+        "start_s": 10,
+        "end_s": 45,
+        "home_skaters_json": "[8478402]",
+        "away_skaters_json": "[]",
+        "home_goalie_player_id": None,
+        "away_goalie_player_id": None,
+        "strength_state": "1v0",
+    }
+
+    insert_shift_records(conn, [shift])
+    assert replace_game_on_ice_intervals(conn, 2025020001, [interval]) == 1
+    assert replace_game_on_ice_intervals(conn, 2025020001, [interval]) == 1
+    assert game_has_current_shift_data(conn, 2025020001)
+
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM on_ice_intervals")
+    assert cur.fetchone()[0] == 1
+
+
 # ── Phase 2.5.1: players upsert / backfill / populate_player_game_stats ─────
+
+
+def test_game_has_current_shift_data_rejects_unresolved_positions(conn):
+    create_shifts_table(conn)
+    create_on_ice_intervals_table(conn)
+    insert_shift_records(conn, [{
+        "game_id": 2025020001,
+        "player_id": 8478402,
+        "team_id": 22,
+        "team_side": "home",
+        "position": None,
+        "period": 1,
+        "start_seconds": 10,
+        "end_seconds": 45,
+    }])
+    replace_game_on_ice_intervals(conn, 2025020001, [{
+        "game_id": 2025020001,
+        "period": 1,
+        "start_s": 10,
+        "end_s": 45,
+        "home_skaters_json": "[8478402]",
+        "away_skaters_json": "[]",
+        "home_goalie_player_id": None,
+        "away_goalie_player_id": None,
+        "strength_state": "1v0",
+    }])
+
+    assert not game_has_current_shift_data(conn, 2025020001)
 
 
 def _player_row(player_id, position="C", team_id=22, shoots="L"):

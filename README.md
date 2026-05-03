@@ -95,13 +95,18 @@ Pure Python functions (no DB or HTTP dependencies) for computing shot event feat
 - **Rest and travel** — rest days between games, back-to-back flag, haversine travel distance, timezone delta
 
 
-### Shift-level roster decomposition foundation (Phase 1)
+### Shift-level roster decomposition foundation (Phases 1-2)
 
-The roster-change analysis scaffold now includes a working shift-level Phase 1 foundation:
+The roster-change analysis scaffold now includes a working shift-level foundation:
 
 - `src/shifts.py` fetches and normalizes shift-chart rows into `ShiftRecord` objects and runs baseline quality checks.
 - `src/on_ice_builder.py` converts shifts into non-overlapping on-ice intervals and projects interval players onto shot-event on-ice slots (`home_on_ice_1..6`, `away_on_ice_1..6`).
-- The Phase 1 outputs support downstream QoT/QoC and RAPM feature phases.
+- `src/shift_population.py` persists shifts and intervals idempotently, updates shot-event on-ice slots, and is reused by the scraper for newly processed games.
+- `scripts/backfill_shift_data.py` backfills historical shift data:
+  ```powershell
+  & "C:\Users\micha\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe" scripts/backfill_shift_data.py --all
+  ```
+- The shift-level outputs support downstream QoT/QoC and RAPM feature phases.
 
 ## Arena reference data (`arena_reference.py`)
 

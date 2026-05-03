@@ -1,6 +1,9 @@
 import datetime
 import sqlite3
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
+
+import pytest
 
 import main
 from database import (
@@ -30,6 +33,15 @@ def _in_memory_conn():
     ensure_player_database_schema(conn)
     ensure_xg_schema(conn)
     return conn
+
+
+@pytest.fixture(autouse=True)
+def _disable_shift_population(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "populate_shift_data_for_game",
+        lambda connection, game_id: SimpleNamespace(games_populated=0),
+    )
 
 
 def _simple_full_pbp(game_id, home_id=10, away_id=20):
@@ -382,6 +394,25 @@ def test_main_backfills_shot_events_for_existing_raw_game(
         main.main()
 
     mock_full_pbp.assert_called_once_with(game_id)
+
+
+@patch("main.get_full_play_by_play")
+def test_process_game_populates_shift_data_after_shot_events(mock_full_pbp, monkeypatch):
+    conn = _in_memory_conn()
+    game_id = 2007020001
+    shift_calls = []
+
+    def fake_shift_population(connection, shifted_game_id):
+        assert connection is conn
+        shift_calls.append(shifted_game_id)
+        return SimpleNamespace(games_populated=0)
+
+    mock_full_pbp.return_value = _simple_full_pbp(game_id)
+    monkeypatch.setattr(main, "populate_shift_data_for_game", fake_shift_population)
+
+    assert main._process_game(conn, game_id)
+
+    assert shift_calls == [game_id]
 
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM shot_events WHERE game_id = ?", (game_id,))

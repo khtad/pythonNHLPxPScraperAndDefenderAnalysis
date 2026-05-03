@@ -198,6 +198,22 @@ player-schema bootstrap
      - Prefer a fresh `--basetemp` value for each rerun after a temp-dir permission failure, and report any generated unreadable temp directories that could not be cleaned up.
      - If pytest reaches test execution but crashes during session cleanup with `PermissionError` on the fresh `--basetemp`, rerun outside the sandbox; sandboxed reruns may keep generating unreadable temp roots even when the code is healthy.
 
+12. **Failure:** Shift-table population could mark a game complete even when shift rows lacked player-position context, causing goalies to be classified as skaters and preventing later reruns from repairing on-ice slots after player metadata became available.
+   - **Cause:** `game_has_current_shift_data` checked only for current-version `shifts` and `on_ice_intervals` rows. It did not verify that current shift rows had resolved `position` and `team_side` values before treating the game as complete.
+   - **Fix:** Treat current shift rows with null/empty `position` or unresolved `team_side` as incomplete, skip new writes when a fetched payload cannot resolve that context, and add regression coverage for recomputing a previously unresolved game after player positions are available.
+   - **Rules to avoid repeat failures of this type:**
+     - Completeness checks for derived data must validate the required semantic context, not just row existence and schema-version columns.
+     - Do not materialize on-ice intervals from shift rows unless every row needed for the interval builder has resolved team side and position context.
+     - When a derived table depends on a fallback dimension such as `players.position`, add a test for rerunning after that fallback data becomes available.
+
+13. **Failure:** Shift population logged 404s for every game because the fetcher called `https://api-web.nhle.com/v1/gamecenter/{game_id}/shiftcharts`, which is not the public shift-chart route.
+   - **Cause:** The implementation assumed shift charts lived under the same `api-web.nhle.com/v1/gamecenter` surface as play-by-play. NHL shift charts are served from the separate Stats REST API at `https://api.nhle.com/stats/rest/en/shiftcharts?cayenneExp=gameId={game_id}`.
+   - **Fix:** Pointed `fetch_shift_rows_for_game()` at the Stats REST shiftcharts endpoint and added a URL-construction regression test.
+   - **Rules to avoid repeat failures of this type:**
+     - Treat NHL Web API (`api-web.nhle.com/v1`) and Stats REST API (`api.nhle.com/stats/rest`) as distinct endpoint families; do not infer one endpoint path from the other without a source or live verification.
+     - Any new external endpoint helper must have a test that asserts the full URL, including host and query string.
+     - If a newly wired endpoint returns uniform 404s across many valid game IDs, verify the route before treating the payload as missing data.
+
 ## Derived-Data Versioning & Backfill
 
 Each derived table stores a schema version in every row, recording which code version produced it:

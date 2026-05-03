@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Iterable
 
+from shifts import clock_to_seconds
+
 ON_ICE_SKATER_COUNT = 5
 ON_ICE_SLOT_COUNT_PER_TEAM = 6
 SHOT_SLOT_TEMPLATE_KEYS = tuple(
@@ -125,7 +127,7 @@ def attach_on_ice_slots_to_shots(shot_rows: Iterable[dict], interval_rows: Itera
             updated_shot.setdefault(slot_key, None)
 
         shot_period = int(updated_shot.get("period", 0))
-        shot_seconds = int(updated_shot.get("time_in_period", 0))
+        shot_seconds = clock_to_seconds(updated_shot.get("time_in_period", 0))
         shot_game_id = int(updated_shot.get("game_id", 0))
         candidates = interval_lookup.get((shot_game_id, shot_period), [])
 
