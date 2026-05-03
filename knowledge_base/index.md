@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-05-02 (Corrected shift-chart endpoint to NHL Stats REST)
+> Last updated: 2026-05-03 (Added rolling venue-regime diagnostics for venue scorekeeper bias)
 
 ## Concepts
 

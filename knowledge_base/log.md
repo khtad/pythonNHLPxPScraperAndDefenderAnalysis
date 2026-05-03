@@ -269,3 +269,12 @@
 - Updated `wiki/data/nhl-api-endpoints.md` - corrected the shift charts URL from the Web API `gamecenter/{game_id}/shiftcharts` route to the NHL Stats REST `shiftcharts?cayenneExp=gameId=...` route.
 - Updated `index.md` - refreshed Last updated summary and endpoint article description.
 **Notes:** Runtime scraper logs showed uniform 404 responses from the old shift-chart URL. The project now documents that schedule, play-by-play, and player landing come from `api-web.nhle.com/v1`, while shift charts come from `api.nhle.com/stats/rest/en`.
+
+### 2026-05-03 - UPDATE
+
+**Action:** Added rolling venue-regime scorekeeper-bias diagnostics
+**Source:** `src/venue_bias.py`, `src/validation.py` (`evaluate_venue_correction_scorecard`), `scripts/export_venue_correction_validation.py`, `scripts/export_venue_correction_validation_from_db.py`, `docs/xg_model_roadmap.md`, `docs/xg_model_components/04_scorekeeper_bias.md`
+**Pages touched:**
+- Updated `wiki/concepts/venue-scorekeeper-bias.md` - documented prior-only rolling estimates, centered exploratory diagnostics, regime classifications, and regime-aware scorecard acceptance semantics.
+- Updated `index.md` - refreshed Last updated summary.
+**Notes:** The venue-correction scorecard can now distinguish blocking unexplained/confounded residuals from supported persistent or temporary scorekeeper regimes. The committed live scorecard artifact is still the 2026-05-01 max-z result; venue correction remains exploratory until the DB-backed scorecard is rerun with the new regime-aware diagnostics and passes all hard gates.
