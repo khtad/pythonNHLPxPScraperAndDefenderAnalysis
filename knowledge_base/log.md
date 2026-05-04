@@ -278,3 +278,12 @@
 - Updated `wiki/concepts/venue-scorekeeper-bias.md` - documented prior-only rolling estimates, centered exploratory diagnostics, regime classifications, and regime-aware scorecard acceptance semantics.
 - Updated `index.md` - refreshed Last updated summary.
 **Notes:** The venue-correction scorecard can now distinguish blocking unexplained/confounded residuals from supported persistent or temporary scorekeeper regimes. The committed live scorecard artifact is still the 2026-05-01 max-z result; venue correction remains exploratory until the DB-backed scorecard is rerun with the new regime-aware diagnostics and passes all hard gates.
+
+### 2026-05-04 - UPDATE
+
+**Action:** Recorded the executed live regime-aware venue-correction scorecard result
+**Source:** `artifacts/venue_correction_validation_latest.md`, `docs/xg_model_roadmap.md`, `docs/xg_model_components/04_scorekeeper_bias.md`, `knowledge_base/wiki/concepts/venue-scorekeeper-bias.md`
+**Pages touched:**
+- Updated `wiki/concepts/venue-scorekeeper-bias.md` - documented that the live scorecard now runs in `regime_aware` mode and still fails because blocking unexplained/confounded residuals remain.
+- Updated `index.md` - refreshed Last updated summary.
+**Notes:** This supersedes the 2026-05-03 note that the committed artifact still needed a regime-aware rerun. The current live artifact treats `|z| >= 2` as a candidate residual rather than an automatic veto; supported `persistent_bias` and `temporary_supported_regime` rows are non-blocking, while `unexplained_or_confounded`, `population_shift_detected`, and `insufficient_evidence` remain blocking. The latest result passes held-out log-loss and home-ice guardrails but fails distance/location residuals (24 blocking regimes, 4 supported regimes) and event-frequency residuals (4 blocking regimes, 23 supported regimes), so venue correction remains exploratory.
