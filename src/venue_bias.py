@@ -377,7 +377,7 @@ def classify_rolling_venue_regimes(
     prior_rows = compute_prior_rolling_bias_estimates(residual_rows)
     rows = compute_centered_rolling_bias_estimates(prior_rows)
     population_shares = _population_anomaly_shares(rows, z_score_threshold)
-    directional_counts = _local_directional_candidate_counts(
+    directional_counts = _prior_directional_candidate_counts(
         rows,
         z_score_threshold,
     )
@@ -784,10 +784,11 @@ def _population_anomaly_shares(
     }
 
 
-def _local_directional_candidate_counts(
+def _prior_directional_candidate_counts(
     rows: Sequence[Mapping[str, Any]],
     z_score_threshold: float,
 ) -> dict[tuple[str, str, str], int]:
+    """Count same-direction nearby candidates without using future seasons."""
     counts: dict[tuple[str, str, str], int] = {}
     for venue_name, venue_rows in _rows_grouped_by_venue(rows).items():
         for row in venue_rows:
@@ -799,10 +800,9 @@ def _local_directional_candidate_counts(
             local_count = 0
             for neighbor in venue_rows:
                 neighbor_year = _season_start_year(str(neighbor["season"]))
-                if (
-                    abs(neighbor_year - season_year)
-                    > VENUE_REGIME_CENTERED_WINDOW_RADIUS
-                ):
+                if neighbor_year > season_year:
+                    continue
+                if season_year - neighbor_year > VENUE_REGIME_CENTERED_WINDOW_RADIUS:
                     continue
                 if not bool(neighbor.get("sample_adequate", True)):
                     continue

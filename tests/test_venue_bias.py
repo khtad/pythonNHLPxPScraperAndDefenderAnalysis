@@ -346,11 +346,37 @@ def test_rolling_regime_classifier_marks_persistent_bias():
     ]
 
     classified = classify_rolling_venue_regimes(rows)
-    arena_rows = [row for row in classified if row["venue_name"] == "Arena A"]
-
-    assert {row["regime_classification"] for row in arena_rows} == {
-        VENUE_REGIME_PERSISTENT_BIAS
+    arena_rows = {
+        row["season"]: row for row in classified
+        if row["venue_name"] == "Arena A"
     }
+
+    assert arena_rows["20102011"]["regime_classification"] == (
+        VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED
+    )
+    assert arena_rows["20112012"]["regime_classification"] == (
+        VENUE_REGIME_PERSISTENT_BIAS
+    )
+
+
+def test_rolling_regime_classifier_does_not_use_future_spike_for_persistence():
+    rows = [
+        _regime_row("Arena A", "20102011", 2.5),
+        *_normal_population_rows("20102011", "Arena A"),
+        _regime_row("Arena A", "20112012", 2.4),
+        *_normal_population_rows("20112012", "Arena A"),
+    ]
+
+    classified = classify_rolling_venue_regimes(rows)
+    first_spike = [
+        row for row in classified
+        if row["venue_name"] == "Arena A" and row["season"] == "20102011"
+    ][0]
+
+    assert first_spike["same_direction_candidate_seasons"] == 1
+    assert first_spike["regime_classification"] == (
+        VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED
+    )
 
 
 def test_rolling_regime_classifier_does_not_join_distant_spikes():
