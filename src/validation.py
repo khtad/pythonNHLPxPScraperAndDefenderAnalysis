@@ -31,6 +31,14 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from venue_bias import (
+    VENUE_REGIME_INSUFFICIENT_EVIDENCE,
+    VENUE_REGIME_PERSISTENT_BIAS,
+    VENUE_REGIME_POPULATION_SHIFT,
+    VENUE_REGIME_TEMPORARY_SUPPORTED,
+    VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED,
+)
+
 
 N_BOOTSTRAP_SAMPLES = 10_000
 MIN_SHOTS_PER_CELL = 400
@@ -51,6 +59,19 @@ VENUE_CORRECTION_MAX_ABS_RESIDUAL_Z_SCORE = 2.0
 VENUE_CORRECTION_MAX_ABS_EVENT_FREQUENCY_Z_SCORE = 2.0
 _VENUE_CORRECTION_MIN_BASELINE_ADVANTAGE = 1e-9
 _VENUE_CORRECTION_LOG_LOSS_TOLERANCE = 1e-12
+_VENUE_REGIME_RESIDUAL_Z_SCORE_MATCH_ATOL = 1e-9
+_VENUE_REGIME_RESIDUAL_Z_SCORE_MATCH_RTOL = 1e-9
+_VENUE_REGIME_GATE_MODE_MAX_Z = "max_z"
+_VENUE_REGIME_GATE_MODE_REGIME_AWARE = "regime_aware"
+_VENUE_REGIME_NON_BLOCKING_LABELS = {
+    VENUE_REGIME_PERSISTENT_BIAS,
+    VENUE_REGIME_TEMPORARY_SUPPORTED,
+}
+_VENUE_REGIME_BLOCKING_LABELS = {
+    VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED,
+    VENUE_REGIME_INSUFFICIENT_EVIDENCE,
+    VENUE_REGIME_POPULATION_SHIFT,
+}
 
 
 def bootstrap_goal_rate_ci(
@@ -478,6 +499,8 @@ def evaluate_venue_correction_scorecard(
     is_home_attempt: np.ndarray,
     distance_residual_venue_z_scores: Mapping[str, float] | Sequence[float],
     event_frequency_residual_venue_z_scores: Mapping[str, float] | Sequence[float],
+    distance_regime_diagnostics: Sequence[Mapping[str, Any]] | None = None,
+    event_frequency_regime_diagnostics: Sequence[Mapping[str, Any]] | None = None,
     max_home_ice_advantage_removal: float = (
         VENUE_CORRECTION_MAX_HOME_ICE_ADVANTAGE_REMOVAL
     ),
@@ -500,55 +523,74 @@ def evaluate_venue_correction_scorecard(
         is_home_attempt,
         max_home_ice_advantage_removal=max_home_ice_advantage_removal,
     )
-    distance_items = _coerce_residual_z_score_items(distance_residual_venue_z_scores)
-    worst_distance_venue, worst_distance_z_score = _max_abs_residual_z_score_item(
-        distance_items
+    distance_gate = _evaluate_residual_regime_gate(
+        distance_residual_venue_z_scores,
+        distance_regime_diagnostics,
+        max_abs_distance_residual_z_score,
     )
-    max_abs_distance_residual_z_score_observed = abs(worst_distance_z_score)
-    distance_residual_z_score_pass = (
-        max_abs_distance_residual_z_score_observed < max_abs_distance_residual_z_score
-    )
-
-    frequency_items = _coerce_residual_z_score_items(
-        event_frequency_residual_venue_z_scores
-    )
-    worst_frequency_venue, worst_frequency_z_score = _max_abs_residual_z_score_item(
-        frequency_items
-    )
-    max_abs_frequency_z_score_observed = abs(worst_frequency_z_score)
-    event_frequency_residual_z_score_pass = (
-        max_abs_frequency_z_score_observed < max_abs_event_frequency_z_score
+    frequency_gate = _evaluate_residual_regime_gate(
+        event_frequency_residual_venue_z_scores,
+        event_frequency_regime_diagnostics,
+        max_abs_event_frequency_z_score,
     )
 
     result = dict(holdout)
     result.update({
-        "n_distance_residual_venues": int(len(distance_items)),
-        "worst_distance_residual_venue": worst_distance_venue,
+        "n_distance_residual_venues": int(distance_gate["n_residual_venues"]),
+        "worst_distance_residual_venue": distance_gate["worst_residual_venue"],
         "max_abs_distance_residual_z_score": float(
-            max_abs_distance_residual_z_score_observed
+            distance_gate["max_abs_residual_z_score"]
         ),
         "max_allowed_abs_distance_residual_z_score": float(
             max_abs_distance_residual_z_score
         ),
-        "distance_residual_z_score_pass": bool(distance_residual_z_score_pass),
-        "n_event_frequency_residual_venues": int(len(frequency_items)),
-        "worst_event_frequency_residual_venue": worst_frequency_venue,
-        "max_abs_event_frequency_z_score": float(max_abs_frequency_z_score_observed),
+        "distance_residual_z_score_pass": bool(distance_gate["pass"]),
+        "distance_residual_gate_mode": distance_gate["gate_mode"],
+        "distance_blocking_regime_count": int(distance_gate["n_blocking_regimes"]),
+        "distance_supported_regime_count": int(distance_gate["n_supported_regimes"]),
+        "distance_persistent_regime_count": int(distance_gate["n_persistent_regimes"]),
+        "distance_temporary_supported_regime_count": int(
+            distance_gate["n_temporary_supported_regimes"]
+        ),
+        "distance_blocking_regimes": distance_gate["blocking_regimes"],
+        "n_event_frequency_residual_venues": int(
+            frequency_gate["n_residual_venues"]
+        ),
+        "worst_event_frequency_residual_venue": (
+            frequency_gate["worst_residual_venue"]
+        ),
+        "max_abs_event_frequency_z_score": float(
+            frequency_gate["max_abs_residual_z_score"]
+        ),
         "max_allowed_abs_event_frequency_z_score": float(
             max_abs_event_frequency_z_score
         ),
         "event_frequency_residual_z_score_pass": bool(
-            event_frequency_residual_z_score_pass
+            frequency_gate["pass"]
         ),
-        "n_venues": int(len(distance_items)),
-        "worst_residual_venue": worst_distance_venue,
-        "max_abs_residual_z_score": float(max_abs_distance_residual_z_score_observed),
+        "event_frequency_residual_gate_mode": frequency_gate["gate_mode"],
+        "event_frequency_blocking_regime_count": int(
+            frequency_gate["n_blocking_regimes"]
+        ),
+        "event_frequency_supported_regime_count": int(
+            frequency_gate["n_supported_regimes"]
+        ),
+        "event_frequency_persistent_regime_count": int(
+            frequency_gate["n_persistent_regimes"]
+        ),
+        "event_frequency_temporary_supported_regime_count": int(
+            frequency_gate["n_temporary_supported_regimes"]
+        ),
+        "event_frequency_blocking_regimes": frequency_gate["blocking_regimes"],
+        "n_venues": int(distance_gate["n_residual_venues"]),
+        "worst_residual_venue": distance_gate["worst_residual_venue"],
+        "max_abs_residual_z_score": float(distance_gate["max_abs_residual_z_score"]),
         "max_allowed_abs_residual_z_score": float(max_abs_distance_residual_z_score),
-        "residual_z_score_pass": bool(distance_residual_z_score_pass),
+        "residual_z_score_pass": bool(distance_gate["pass"]),
         "overall_pass": bool(
             holdout["overall_pass"]
-            and distance_residual_z_score_pass
-            and event_frequency_residual_z_score_pass
+            and distance_gate["pass"]
+            and frequency_gate["pass"]
         ),
     })
     return result
@@ -580,3 +622,184 @@ def _max_abs_residual_z_score_item(
     residual_items: Sequence[tuple[str, float]],
 ) -> tuple[str, float]:
     return max(residual_items, key=lambda item: abs(item[1]))
+
+
+def _evaluate_residual_regime_gate(
+    residual_z_scores: Mapping[str, float] | Sequence[float],
+    regime_diagnostics: Sequence[Mapping[str, Any]] | None,
+    max_abs_z_score: float,
+) -> Dict[str, Any]:
+    residual_items = _coerce_residual_z_score_items(residual_z_scores)
+    worst_venue, worst_z_score = _max_abs_residual_z_score_item(residual_items)
+    max_abs_observed = abs(worst_z_score)
+    if regime_diagnostics is None:
+        return {
+            "gate_mode": _VENUE_REGIME_GATE_MODE_MAX_Z,
+            "pass": bool(max_abs_observed < max_abs_z_score),
+            "n_residual_venues": int(len(residual_items)),
+            "worst_residual_venue": worst_venue,
+            "max_abs_residual_z_score": float(max_abs_observed),
+            "n_blocking_regimes": 0,
+            "n_supported_regimes": 0,
+            "n_persistent_regimes": 0,
+            "n_temporary_supported_regimes": 0,
+            "blocking_regimes": [],
+        }
+
+    regime_rows = [dict(row) for row in regime_diagnostics]
+    residual_lookup = dict(residual_items)
+    gate_regime_rows = [
+        row for row in regime_rows
+        if _regime_row_matches_current_residual(row, residual_lookup)
+    ]
+    missing_candidate_rows = _missing_residual_candidate_regime_rows(
+        residual_items,
+        gate_regime_rows,
+        max_abs_z_score,
+    )
+    blocking_rows = [
+        *_blocking_regime_rows(gate_regime_rows, max_abs_z_score),
+        *missing_candidate_rows,
+    ]
+    return {
+        "gate_mode": _VENUE_REGIME_GATE_MODE_REGIME_AWARE,
+        "pass": bool(len(blocking_rows) == 0),
+        "n_residual_venues": int(len(residual_items)),
+        "worst_residual_venue": worst_venue,
+        "max_abs_residual_z_score": float(max_abs_observed),
+        "n_blocking_regimes": int(len(blocking_rows)),
+        "n_supported_regimes": int(
+            sum(
+                1
+                for row in gate_regime_rows
+                if row.get("regime_classification")
+                in _VENUE_REGIME_NON_BLOCKING_LABELS
+                and _is_residual_gate_candidate(row, max_abs_z_score)
+            )
+        ),
+        "n_persistent_regimes": int(
+            sum(
+                1
+                for row in gate_regime_rows
+                if row.get("regime_classification") == VENUE_REGIME_PERSISTENT_BIAS
+                and _is_residual_gate_candidate(row, max_abs_z_score)
+            )
+        ),
+        "n_temporary_supported_regimes": int(
+            sum(
+                1
+                for row in gate_regime_rows
+                if row.get("regime_classification") == VENUE_REGIME_TEMPORARY_SUPPORTED
+                and _is_residual_gate_candidate(row, max_abs_z_score)
+            )
+        ),
+        "blocking_regimes": _compact_blocking_regimes(blocking_rows),
+    }
+
+
+def _blocking_regime_rows(
+    regime_rows: Sequence[Mapping[str, Any]],
+    max_abs_z_score: float,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in regime_rows:
+        if not _is_residual_gate_candidate(row, max_abs_z_score):
+            continue
+        label = row.get("regime_classification")
+        if label in _VENUE_REGIME_NON_BLOCKING_LABELS:
+            continue
+        if label in _VENUE_REGIME_BLOCKING_LABELS or label is not None:
+            rows.append(dict(row))
+            continue
+        rows.append(dict(row))
+    rows.sort(
+        key=lambda item: abs(float(item.get("residual_z_score", 0.0))),
+        reverse=True,
+    )
+    return rows
+
+
+def _missing_residual_candidate_regime_rows(
+    residual_items: Sequence[tuple[str, float]],
+    regime_rows: Sequence[Mapping[str, Any]],
+    max_abs_z_score: float,
+) -> list[dict[str, Any]]:
+    regime_labels = {
+        _regime_diagnostic_label(row)
+        for row in regime_rows
+    }
+    missing_rows: list[dict[str, Any]] = []
+    for label, z_score in residual_items:
+        if abs(z_score) < max_abs_z_score:
+            continue
+        if label in regime_labels:
+            continue
+        missing_rows.append(
+            _residual_item_to_missing_regime_row(label, z_score)
+        )
+    return missing_rows
+
+
+def _is_residual_gate_candidate(
+    row: Mapping[str, Any],
+    max_abs_z_score: float,
+) -> bool:
+    z_score = float(row.get("residual_z_score", 0.0))
+    return bool(np.isfinite(z_score) and abs(z_score) >= max_abs_z_score)
+
+
+def _compact_blocking_regimes(
+    blocking_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "metric_name": row.get("metric_name", "unspecified"),
+            "season": row.get("season"),
+            "venue_name": row.get("venue_name"),
+            "residual_z_score": float(row.get("residual_z_score", 0.0)),
+            "regime_classification": row.get("regime_classification"),
+        }
+        for row in blocking_rows
+    ]
+
+
+def _regime_diagnostic_label(row: Mapping[str, Any]) -> str:
+    return f"{row.get('season')}:{row.get('venue_name')}"
+
+
+def _regime_row_matches_current_residual(
+    row: Mapping[str, Any],
+    residual_lookup: Mapping[str, float],
+) -> bool:
+    label = _regime_diagnostic_label(row)
+    if label not in residual_lookup:
+        return False
+    row_z_score = float(row.get("residual_z_score", np.nan))
+    residual_z_score = float(residual_lookup[label])
+    return bool(
+        np.isfinite(row_z_score)
+        and np.isclose(
+            row_z_score,
+            residual_z_score,
+            atol=_VENUE_REGIME_RESIDUAL_Z_SCORE_MATCH_ATOL,
+            rtol=_VENUE_REGIME_RESIDUAL_Z_SCORE_MATCH_RTOL,
+        )
+    )
+
+
+def _residual_item_to_missing_regime_row(
+    label: str,
+    z_score: float,
+) -> dict[str, Any]:
+    if ":" in label:
+        season, venue_name = label.split(":", 1)
+    else:
+        season = None
+        venue_name = label
+    return {
+        "metric_name": "unspecified",
+        "season": season,
+        "venue_name": venue_name,
+        "residual_z_score": float(z_score),
+        "regime_classification": VENUE_REGIME_INSUFFICIENT_EVIDENCE,
+    }

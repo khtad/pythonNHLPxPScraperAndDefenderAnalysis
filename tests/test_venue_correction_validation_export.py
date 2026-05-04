@@ -87,6 +87,46 @@ def test_format_scorecard_includes_gate_summary():
     assert "hockey_context_confounded" in text
 
 
+def test_format_scorecard_includes_regime_aware_diagnostics():
+    payload = _passing_payload()
+    payload["distance_residual_venue_z_scores"] = {
+        "20102011:Arena A": 2.4,
+        "20102011:Arena B": -1.8,
+    }
+    payload["distance_regime_diagnostics"] = [
+        {
+            "metric_name": "distance_location",
+            "season": "20102011",
+            "venue_name": "Arena A",
+            "residual_z_score": 2.4,
+            "regime_classification": "temporary_supported_regime",
+        }
+    ]
+    payload["distance_top_regime_diagnostics"] = [
+        {
+            "metric_name": "distance_location",
+            "season": "20102011",
+            "venue_name": "Arena A",
+            "residual_z_score": 2.4,
+            "regime_classification": "temporary_supported_regime",
+            "prior_rolling_bias": 1.5,
+            "centered_rolling_bias": 0.8,
+            "population_anomaly_share": 0.1,
+            "evidence_supports_regime": True,
+            "known_scorekeeper_prior": True,
+        }
+    ]
+
+    metrics = exporter.evaluate_payload(payload)
+    text = exporter.format_scorecard(metrics)
+
+    assert metrics["distance_residual_z_score_pass"] is True
+    assert metrics["distance_residual_gate_mode"] == "regime_aware"
+    assert "Rolling Venue-Regime Diagnostics" in text
+    assert "blocking regimes = 0" in text
+    assert "temporary_supported_regime" in text
+
+
 def test_evaluate_payload_rejects_missing_required_field():
     payload = _passing_payload()
     payload.pop("event_frequency_residual_venue_z_scores")

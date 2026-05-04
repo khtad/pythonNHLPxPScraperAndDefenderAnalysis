@@ -93,6 +93,10 @@ def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         payload["is_home_attempt"],
         payload["distance_residual_venue_z_scores"],
         payload["event_frequency_residual_venue_z_scores"],
+        distance_regime_diagnostics=payload.get("distance_regime_diagnostics"),
+        event_frequency_regime_diagnostics=payload.get(
+            "event_frequency_regime_diagnostics"
+        ),
     )
     metadata_fields = (
         "correction_method",
@@ -103,6 +107,8 @@ def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "event_frequency_supported_count",
         "event_frequency_primary_scope",
         "event_frequency_primary_group",
+        "distance_top_regime_diagnostics",
+        "event_frequency_top_regime_diagnostics",
     )
     for metadata_field in metadata_fields:
         if metadata_field in payload:
@@ -134,19 +140,29 @@ def format_scorecard(metrics: dict[str, Any]) -> str:
         f"max = {metrics['max_allowed_advantage_removed_ratio']:.3f} |\n"
         f"| Distance/location residual z-scores | "
         f"{_format_gate(metrics['distance_residual_z_score_pass'])} | "
-        f"max abs(z) = {metrics['max_abs_distance_residual_z_score']:.3f}, "
-        f"limit < {metrics['max_allowed_abs_distance_residual_z_score']:.3f} |\n"
+        f"{_format_residual_gate_metric(metrics, 'distance')} |\n"
         f"| Event-frequency residual z-scores | "
         f"{_format_gate(metrics['event_frequency_residual_z_score_pass'])} | "
-        f"max abs(z) = {metrics['max_abs_event_frequency_z_score']:.3f}, "
-        f"limit < {metrics['max_allowed_abs_event_frequency_z_score']:.3f} |\n\n"
+        f"{_format_residual_gate_metric(metrics, 'event_frequency')} |\n\n"
         "## Summary Metrics\n\n"
         f"- Overall pass: {_format_gate(metrics['overall_pass'])}\n"
         f"- Holdout rows: {metrics['n_rows']:,}\n"
         f"- Distance residual venue-seasons evaluated: "
         f"{metrics['n_distance_residual_venues']:,}\n"
+        f"- Distance residual gate mode: "
+        f"`{metrics.get('distance_residual_gate_mode', 'max_z')}`\n"
+        f"- Distance blocking regimes: "
+        f"{metrics.get('distance_blocking_regime_count', 0):,}\n"
+        f"- Distance supported regimes: "
+        f"{metrics.get('distance_supported_regime_count', 0):,}\n"
         f"- Event-frequency residual venue-seasons evaluated: "
         f"{metrics['n_event_frequency_residual_venues']:,}\n"
+        f"- Event-frequency residual gate mode: "
+        f"`{metrics.get('event_frequency_residual_gate_mode', 'max_z')}`\n"
+        f"- Event-frequency blocking regimes: "
+        f"{metrics.get('event_frequency_blocking_regime_count', 0):,}\n"
+        f"- Event-frequency supported regimes: "
+        f"{metrics.get('event_frequency_supported_regime_count', 0):,}\n"
         f"- Baseline log loss: {metrics['baseline_log_loss']:.6f}\n"
         f"- Corrected log loss: {metrics['corrected_log_loss']:.6f}\n"
         f"- Baseline home advantage: {metrics['baseline_home_advantage']:.6f}\n"
@@ -155,6 +171,7 @@ def format_scorecard(metrics: dict[str, Any]) -> str:
         f"`{metrics['worst_distance_residual_venue']}`\n"
         f"- Worst event-frequency residual: "
         f"`{metrics['worst_event_frequency_residual_venue']}`\n"
+        f"{_format_venue_regime_diagnostics(metrics)}"
         f"{_format_event_frequency_anomalies(metrics)}"
         f"{_format_notes(notes)}"
     )
@@ -164,10 +181,67 @@ def _format_gate(passed: bool) -> str:
     return "PASS" if passed else "FAIL"
 
 
+def _format_residual_gate_metric(metrics: dict[str, Any], prefix: str) -> str:
+    if prefix == "distance":
+        max_abs_key = "max_abs_distance_residual_z_score"
+        max_allowed_key = "max_allowed_abs_distance_residual_z_score"
+        blocking_key = "distance_blocking_regime_count"
+        supported_key = "distance_supported_regime_count"
+        mode_key = "distance_residual_gate_mode"
+    else:
+        max_abs_key = "max_abs_event_frequency_z_score"
+        max_allowed_key = "max_allowed_abs_event_frequency_z_score"
+        blocking_key = "event_frequency_blocking_regime_count"
+        supported_key = "event_frequency_supported_regime_count"
+        mode_key = "event_frequency_residual_gate_mode"
+
+    if metrics.get(mode_key) == "regime_aware":
+        return (
+            f"blocking regimes = {metrics.get(blocking_key, 0):,}, "
+            f"supported regimes = {metrics.get(supported_key, 0):,}, "
+            f"max abs(z) = {metrics[max_abs_key]:.3f}, "
+            f"limit < {metrics[max_allowed_key]:.3f}"
+        )
+    return (
+        f"max abs(z) = {metrics[max_abs_key]:.3f}, "
+        f"limit < {metrics[max_allowed_key]:.3f}"
+    )
+
+
 def _format_notes(notes: str) -> str:
     if not notes:
         return ""
     return f"\n## Notes\n\n{notes}\n"
+
+
+def _format_venue_regime_diagnostics(metrics: dict[str, Any]) -> str:
+    distance_rows = metrics.get("distance_top_regime_diagnostics") or []
+    frequency_rows = metrics.get("event_frequency_top_regime_diagnostics") or []
+    if not distance_rows and not frequency_rows:
+        return ""
+
+    lines = [
+        "\n## Rolling Venue-Regime Diagnostics\n",
+        "",
+        "| Metric | Venue-season | z | Classification | Prior roll | "
+        "Centered roll | Population anomaly share | Evidence | Known prior |",
+        "|--------|--------------|---|----------------|------------|"
+        "---------------|--------------------------|----------|-------------|",
+    ]
+    for row in [*distance_rows, *frequency_rows]:
+        evidence = "YES" if row.get("evidence_supports_regime") else "NO"
+        known_prior = "YES" if row.get("known_scorekeeper_prior") else "NO"
+        lines.append(
+            f"| `{row.get('metric_name', 'unspecified')}` | "
+            f"`{row['season']}:{row['venue_name']}` | "
+            f"{float(row['residual_z_score']):.3f} | "
+            f"`{row['regime_classification']}` | "
+            f"{_format_optional_float(row.get('prior_rolling_bias'))} | "
+            f"{_format_optional_float(row.get('centered_rolling_bias'))} | "
+            f"{_format_optional_float(row.get('population_anomaly_share'))} | "
+            f"{evidence} | {known_prior} |"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _format_event_frequency_anomalies(metrics: dict[str, Any]) -> str:

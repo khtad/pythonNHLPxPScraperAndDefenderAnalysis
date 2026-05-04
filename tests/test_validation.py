@@ -34,6 +34,10 @@ from validation import (
     run_temporal_cv,
     run_temporal_cv_with_prior_season_calibration,
 )
+from venue_bias import (
+    VENUE_REGIME_TEMPORARY_SUPPORTED,
+    VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED,
+)
 
 
 # --------------------------------------------------------------------------
@@ -594,6 +598,162 @@ def test_evaluate_venue_correction_scorecard_fails_frequency_residual_z_gate():
     assert result["overall_pass"] is False
     assert result["worst_event_frequency_residual_venue"] == "Arena A"
     assert result["max_abs_event_frequency_z_score"] == pytest.approx(2.4)
+
+
+def test_evaluate_venue_correction_scorecard_allows_supported_regime():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.90, 0.70, 0.40, 0.20, 0.60, 0.40, 0.40, 0.20])
+    corrected = np.array([0.85, 0.75, 0.35, 0.25, 0.55, 0.35, 0.35, 0.25])
+    residual_z = {"20102011:Arena A": 2.4, "20102011:Arena B": -1.8}
+    frequency_z = {"20102011:Arena A": 0.7, "20102011:Arena B": -1.2}
+    distance_regimes = [
+        {
+            "metric_name": "distance_location",
+            "season": "20102011",
+            "venue_name": "Arena A",
+            "residual_z_score": 2.4,
+            "regime_classification": VENUE_REGIME_TEMPORARY_SUPPORTED,
+        }
+    ]
+
+    result = evaluate_venue_correction_scorecard(
+        y_true,
+        baseline,
+        corrected,
+        is_home,
+        residual_z,
+        frequency_z,
+        distance_regime_diagnostics=distance_regimes,
+    )
+
+    assert result["distance_residual_z_score_pass"] is True
+    assert result["distance_residual_gate_mode"] == "regime_aware"
+    assert result["distance_supported_regime_count"] == 1
+    assert result["overall_pass"] is True
+
+
+def test_evaluate_venue_correction_scorecard_blocks_unexplained_regime():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.90, 0.70, 0.40, 0.20, 0.60, 0.40, 0.40, 0.20])
+    corrected = np.array([0.85, 0.75, 0.35, 0.25, 0.55, 0.35, 0.35, 0.25])
+    residual_z = {"20102011:Arena A": 2.4, "20102011:Arena B": -1.8}
+    frequency_z = {"20102011:Arena A": 0.7, "20102011:Arena B": -1.2}
+    distance_regimes = [
+        {
+            "metric_name": "distance_location",
+            "season": "20102011",
+            "venue_name": "Arena A",
+            "residual_z_score": 2.4,
+            "regime_classification": VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED,
+        }
+    ]
+
+    result = evaluate_venue_correction_scorecard(
+        y_true,
+        baseline,
+        corrected,
+        is_home,
+        residual_z,
+        frequency_z,
+        distance_regime_diagnostics=distance_regimes,
+    )
+
+    assert result["distance_residual_z_score_pass"] is False
+    assert result["distance_blocking_regime_count"] == 1
+    assert result["overall_pass"] is False
+
+
+def test_evaluate_venue_correction_scorecard_blocks_missing_regime_diagnostic():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.90, 0.70, 0.40, 0.20, 0.60, 0.40, 0.40, 0.20])
+    corrected = np.array([0.85, 0.75, 0.35, 0.25, 0.55, 0.35, 0.35, 0.25])
+    residual_z = {"20102011:Arena A": 2.4}
+    frequency_z = {"20102011:Arena A": 0.7}
+
+    result = evaluate_venue_correction_scorecard(
+        y_true,
+        baseline,
+        corrected,
+        is_home,
+        residual_z,
+        frequency_z,
+        distance_regime_diagnostics=[],
+    )
+
+    assert result["distance_residual_z_score_pass"] is False
+    assert result["distance_blocking_regime_count"] == 1
+    assert result["distance_blocking_regimes"][0]["regime_classification"] == (
+        "insufficient_evidence"
+    )
+
+
+def test_evaluate_venue_correction_scorecard_blocks_stale_regime_diagnostic():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.90, 0.70, 0.40, 0.20, 0.60, 0.40, 0.40, 0.20])
+    corrected = np.array([0.85, 0.75, 0.35, 0.25, 0.55, 0.35, 0.35, 0.25])
+    residual_z = {"20102011:Arena A": 2.4}
+    frequency_z = {"20102011:Arena A": 0.7}
+    stale_distance_regimes = [
+        {
+            "metric_name": "distance_location",
+            "season": "20102011",
+            "venue_name": "Arena A",
+            "residual_z_score": 1.1,
+            "regime_classification": VENUE_REGIME_TEMPORARY_SUPPORTED,
+        }
+    ]
+
+    result = evaluate_venue_correction_scorecard(
+        y_true,
+        baseline,
+        corrected,
+        is_home,
+        residual_z,
+        frequency_z,
+        distance_regime_diagnostics=stale_distance_regimes,
+    )
+
+    assert result["distance_residual_z_score_pass"] is False
+    assert result["distance_supported_regime_count"] == 0
+    assert result["distance_blocking_regime_count"] == 1
+    assert result["distance_blocking_regimes"][0]["regime_classification"] == (
+        "insufficient_evidence"
+    )
+
+
+def test_evaluate_venue_correction_scorecard_ignores_diagnostic_only_regimes():
+    y_true = np.array([1, 1, 0, 0, 1, 0, 0, 0])
+    is_home = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=bool)
+    baseline = np.array([0.90, 0.70, 0.40, 0.20, 0.60, 0.40, 0.40, 0.20])
+    corrected = np.array([0.85, 0.75, 0.35, 0.25, 0.55, 0.35, 0.35, 0.25])
+    residual_z = {"20102011:Arena A": 1.2}
+    frequency_z = {"20102011:Arena A": 0.7}
+    distance_regimes = [
+        {
+            "metric_name": "distance_location",
+            "season": "20102011",
+            "venue_name": "Outdoor Diagnostic",
+            "residual_z_score": 8.0,
+            "regime_classification": VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED,
+        }
+    ]
+
+    result = evaluate_venue_correction_scorecard(
+        y_true,
+        baseline,
+        corrected,
+        is_home,
+        residual_z,
+        frequency_z,
+        distance_regime_diagnostics=distance_regimes,
+    )
+
+    assert result["distance_residual_z_score_pass"] is True
+    assert result["distance_blocking_regime_count"] == 0
 
 
 def test_evaluate_venue_correction_scorecard_rejects_empty_residuals():
