@@ -17,14 +17,17 @@ from venue_bias import (
     VENUE_REGIME_POPULATION_SHIFT,
     VENUE_REGIME_TEMPORARY_SUPPORTED,
     VENUE_REGIME_UNEXPLAINED_OR_CONFOUNDED,
+    annotate_distance_location_regime_evidence,
     annotate_event_frequency_anomalies,
     classify_rolling_venue_regimes,
     compute_centered_rolling_bias_estimates,
     compute_event_frequency_diagnostics,
+    compute_paired_away_distance_location_comparisons,
     compute_paired_away_frequency_comparisons,
     compute_prior_rolling_bias_estimates,
     primary_event_frequency_residual_z_scores,
     primary_event_frequency_regime_diagnostics,
+    residual_z_score_rows,
 )
 
 
@@ -49,6 +52,28 @@ def _game_row(
         "event_count": event_count,
         "home_event_count": event_count - away_event_count,
         "away_event_count": away_event_count,
+    }
+
+
+def _distance_shot_row(
+    venue_name,
+    away_team_id,
+    corrected_distance_to_goal,
+    shot_type="wrist",
+    manpower_state="5v5",
+    season="20202021",
+    shooting_team_id=None,
+):
+    if shooting_team_id is None:
+        shooting_team_id = away_team_id
+    return {
+        "season": season,
+        "venue_name": venue_name,
+        "shooting_team_id": shooting_team_id,
+        "away_team_id": away_team_id,
+        "shot_type": shot_type,
+        "manpower_state": manpower_state,
+        "corrected_distance_to_goal": corrected_distance_to_goal,
     }
 
 
@@ -151,6 +176,230 @@ def test_paired_away_frequency_comparison_controls_for_visitor_team_season():
     assert msg["paired_mean_diff_per_game"] == pytest.approx(10.0)
     assert msg["paired_bootstrap_ci_low"] > 0
     assert msg["paired_sample_adequate"] is True
+
+
+def test_distance_location_paired_evidence_supports_positive_residual():
+    rows = []
+    for offset, team_id in enumerate(range(10, 20)):
+        diff = 3.0 + (offset * 0.2)
+        rows.append(_distance_shot_row("Arena A", team_id, 16.0 + diff))
+        rows.append(_distance_shot_row("Arena B", team_id, 16.0))
+        rows.append(_distance_shot_row("Arena C", team_id, 16.0))
+
+    comparisons = compute_paired_away_distance_location_comparisons(rows)
+    residual_rows = residual_z_score_rows(
+        {
+            "20202021:Arena A": 2.5,
+            "20202021:Arena B": 0.1,
+            "20202021:Arena C": -0.1,
+            "20202021:Arena D": 0.2,
+            "20202021:Arena E": -0.2,
+            "20202021:Arena F": 0.0,
+        },
+        VENUE_REGIME_METRIC_DISTANCE,
+    )
+
+    annotated = annotate_distance_location_regime_evidence(
+        residual_rows,
+        comparisons,
+    )
+    classified = classify_rolling_venue_regimes(annotated)
+    arena = [
+        row for row in classified
+        if row["venue_name"] == "Arena A"
+    ][0]
+
+    assert arena["paired_away_team_seasons"] == 10
+    assert arena["paired_mean_diff_distance"] == pytest.approx(3.9)
+    assert arena["paired_bootstrap_ci_low"] > 0
+    assert arena["paired_cohens_d"] >= 0.2
+    assert arena["evidence_supports_regime"] is True
+    assert arena["distance_location_evidence_classification"] == (
+        ANOMALY_REAL_SCOREKEEPER_REGIME_SUPPORTED
+    )
+    assert arena["regime_classification"] == VENUE_REGIME_TEMPORARY_SUPPORTED
+
+
+def test_distance_location_paired_evidence_supports_negative_residual():
+    rows = []
+    for offset, team_id in enumerate(range(10, 20)):
+        diff = -5.0 + (offset * 0.2)
+        rows.append(_distance_shot_row("Arena A", team_id, 16.0 + diff))
+        rows.append(_distance_shot_row("Arena B", team_id, 16.0))
+        rows.append(_distance_shot_row("Arena C", team_id, 16.0))
+
+    comparisons = compute_paired_away_distance_location_comparisons(rows)
+    residual_rows = residual_z_score_rows(
+        {
+            "20202021:Arena A": -2.6,
+            "20202021:Arena B": 0.1,
+            "20202021:Arena C": -0.1,
+            "20202021:Arena D": 0.2,
+            "20202021:Arena E": -0.2,
+            "20202021:Arena F": 0.0,
+        },
+        VENUE_REGIME_METRIC_DISTANCE,
+    )
+
+    annotated = annotate_distance_location_regime_evidence(
+        residual_rows,
+        comparisons,
+    )
+    classified = classify_rolling_venue_regimes(annotated)
+    arena = [
+        row for row in classified
+        if row["venue_name"] == "Arena A"
+    ][0]
+
+    assert arena["paired_bootstrap_ci_high"] < 0
+    assert arena["paired_cohens_d"] <= -0.2
+    assert arena["evidence_supports_regime"] is True
+    assert arena["regime_classification"] == VENUE_REGIME_TEMPORARY_SUPPORTED
+
+
+def test_distance_location_pairing_removes_shot_mix_confounding():
+    rows = []
+    for team_id in range(10, 20):
+        rows.append(
+            _distance_shot_row(
+                "Arena A",
+                team_id,
+                30.0,
+                shot_type="slap",
+            )
+        )
+        rows.append(
+            _distance_shot_row(
+                "Arena B",
+                team_id,
+                30.0,
+                shot_type="slap",
+            )
+        )
+        rows.append(_distance_shot_row("Arena B", team_id, 10.0))
+
+    comparisons = compute_paired_away_distance_location_comparisons(rows)
+    residual_rows = residual_z_score_rows(
+        {"20202021:Arena A": 2.4},
+        VENUE_REGIME_METRIC_DISTANCE,
+    )
+
+    annotated = annotate_distance_location_regime_evidence(
+        residual_rows,
+        comparisons,
+    )
+
+    assert annotated[0]["paired_away_team_seasons"] == 10
+    assert annotated[0]["paired_mean_diff_distance"] == pytest.approx(0.0)
+    assert annotated[0]["paired_sample_adequate"] is True
+    assert annotated[0]["evidence_supports_regime"] is False
+    assert annotated[0]["distance_location_evidence_classification"] == (
+        ANOMALY_HOCKEY_CONTEXT_CONFOUNDED
+    )
+
+
+def test_distance_location_pairing_requires_adequate_matched_visitor_teams():
+    rows = []
+    for team_id in range(10, 19):
+        rows.append(_distance_shot_row("Arena A", team_id, 22.0))
+        rows.append(_distance_shot_row("Arena B", team_id, 16.0))
+
+    comparisons = compute_paired_away_distance_location_comparisons(rows)
+    residual_rows = residual_z_score_rows(
+        {"20202021:Arena A": 2.4},
+        VENUE_REGIME_METRIC_DISTANCE,
+    )
+
+    annotated = annotate_distance_location_regime_evidence(
+        residual_rows,
+        comparisons,
+    )
+
+    assert annotated[0]["paired_away_team_seasons"] == 9
+    assert annotated[0]["paired_sample_adequate"] is False
+    assert annotated[0]["evidence_supports_regime"] is False
+    assert annotated[0]["distance_location_evidence_classification"] == (
+        ANOMALY_INSUFFICIENT_EVIDENCE
+    )
+
+
+def test_distance_location_pairing_requires_matched_strata():
+    rows = []
+    for team_id in range(10, 20):
+        rows.append(_distance_shot_row("Arena A", team_id, 22.0))
+        rows.append(
+            _distance_shot_row(
+                "Arena B",
+                team_id,
+                16.0,
+                shot_type="slap",
+            )
+        )
+
+    comparisons = compute_paired_away_distance_location_comparisons(rows)
+    residual_rows = residual_z_score_rows(
+        {"20202021:Arena A": 2.4},
+        VENUE_REGIME_METRIC_DISTANCE,
+    )
+
+    annotated = annotate_distance_location_regime_evidence(
+        residual_rows,
+        comparisons,
+    )
+
+    assert annotated[0]["paired_away_team_seasons"] == 0
+    assert annotated[0]["evidence_supports_regime"] is False
+    assert annotated[0]["distance_location_evidence_classification"] == (
+        ANOMALY_INSUFFICIENT_EVIDENCE
+    )
+
+
+@pytest.mark.parametrize(
+    "comparison",
+    [
+        {
+            "paired_bootstrap_ci_low": -0.2,
+            "paired_bootstrap_ci_high": 1.5,
+            "paired_cohens_d": 0.5,
+        },
+        {
+            "paired_bootstrap_ci_low": 1.0,
+            "paired_bootstrap_ci_high": 2.0,
+            "paired_cohens_d": 0.1,
+        },
+        {
+            "paired_bootstrap_ci_low": -2.0,
+            "paired_bootstrap_ci_high": -1.0,
+            "paired_cohens_d": -0.5,
+        },
+    ],
+)
+def test_distance_location_pairing_blocks_weak_crossing_or_mismatched_evidence(
+    comparison,
+):
+    comparison = {
+        "season": "20202021",
+        "venue_name": "Arena A",
+        "paired_away_team_seasons": 10,
+        "paired_mean_diff_distance": 1.0,
+        "paired_wilcoxon_p_value": 0.05,
+        "paired_sample_adequate": True,
+        **comparison,
+    }
+    residual_rows = residual_z_score_rows(
+        {"20202021:Arena A": 2.4},
+        VENUE_REGIME_METRIC_DISTANCE,
+    )
+
+    annotated = annotate_distance_location_regime_evidence(
+        residual_rows,
+        [comparison],
+    )
+
+    assert annotated[0]["evidence_supports_regime"] is False
+    assert annotated[0]["distance_location_evidence_classification"] == (
+        ANOMALY_HOCKEY_CONTEXT_CONFOUNDED
+    )
 
 
 def test_anomaly_classifier_marks_supported_real_scorekeeper_regime():

@@ -36,6 +36,25 @@ def _passing_payload():
         },
         "event_frequency_primary_scope": "regular_season",
         "event_frequency_primary_group": "training_attempts",
+        "distance_location_candidate_count": 1,
+        "distance_location_supported_count": 1,
+        "distance_top_paired_diagnostics": [
+            {
+                "season": "20202021",
+                "venue_name": "Arena A",
+                "residual_z_score": 2.4,
+                "paired_away_team_seasons": 10,
+                "paired_mean_diff_distance": 1.2,
+                "paired_bootstrap_ci_low": 0.4,
+                "paired_bootstrap_ci_high": 2.0,
+                "paired_cohens_d": 0.35,
+                "evidence_supports_regime": True,
+                "distance_location_evidence_classification": (
+                    "real_scorekeeper_regime_supported"
+                ),
+                "regime_classification": "temporary_supported_regime",
+            }
+        ],
         "event_frequency_candidate_count": 1,
         "event_frequency_supported_count": 0,
         "event_frequency_top_anomalies": [
@@ -83,6 +102,8 @@ def test_format_scorecard_includes_gate_summary():
     assert "max abs(z) = 1.800" in text
     assert "Overall pass: PASS" in text
     assert "Arena B" in text
+    assert "Distance-Location Paired Diagnostics" in text
+    assert "real_scorekeeper_regime_supported" in text
     assert "Event-Frequency Diagnostics" in text
     assert "hockey_context_confounded" in text
 

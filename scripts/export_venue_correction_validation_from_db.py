@@ -14,7 +14,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -46,7 +46,10 @@ from export_venue_correction_validation import (  # noqa: E402
     DEFAULT_OUTPUT_PATH,
     format_scorecard,
 )
-from validation import MIN_TRAIN_SEASONS, evaluate_venue_correction_scorecard  # noqa: E402
+from validation import (  # noqa: E402
+    MIN_TRAIN_SEASONS,
+    evaluate_venue_correction_scorecard,
+)
 from venue_bias import (  # noqa: E402
     ANOMALY_REAL_SCOREKEEPER_REGIME_SUPPORTED,
     EVENT_FREQUENCY_GROUP_ALL_ATTEMPTS,
@@ -58,13 +61,16 @@ from venue_bias import (  # noqa: E402
     EVENT_FREQUENCY_SCOPES,
     PRIMARY_EVENT_FREQUENCY_GROUP,
     PRIMARY_EVENT_FREQUENCY_SCOPE,
+    annotate_distance_location_regime_evidence,
     annotate_event_frequency_anomalies,
     classify_rolling_venue_regimes,
     compute_event_frequency_diagnostics,
+    compute_paired_away_distance_location_comparisons,
     compute_paired_away_frequency_comparisons,
     primary_event_frequency_residual_z_scores,
     primary_event_frequency_regime_diagnostics,
     residual_z_score_rows,
+    top_distance_location_paired_diagnostics,
     top_event_frequency_anomalies,
     top_venue_regime_diagnostics,
     VENUE_REGIME_METRIC_DISTANCE,
@@ -105,8 +111,8 @@ def _load_training_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     cursor = conn.cursor()
     cursor.execute(
         """SELECT se.is_goal, se.distance_to_goal, se.angle_to_goal,
-                  se.shot_type, se.shooting_team_id,
-                  g.season, g.venue_name, g.home_team_id
+                  se.shot_type, se.manpower_state, se.shooting_team_id,
+                  g.season, g.venue_name, g.home_team_id, g.away_team_id
            FROM shot_events se
            JOIN games g ON se.game_id = g.game_id
            WHERE se.event_schema_version = ?
@@ -118,11 +124,13 @@ def _load_training_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                  AND se.period >= ?
              )
              AND g.venue_name IS NOT NULL
+             AND g.away_team_id IS NOT NULL
              AND se.distance_to_goal IS NOT NULL
              AND se.angle_to_goal IS NOT NULL
              AND se.shot_type IS NOT NULL
              AND se.manpower_state IS NOT NULL
              AND se.score_state IS NOT NULL
+             AND se.shooting_team_id IS NOT NULL
              AND (
                  (se.shot_event_type = ? AND se.is_goal = 1)
                  OR (se.shot_event_type IN (?, ?) AND se.is_goal = 0)
@@ -416,6 +424,29 @@ def _compute_residual_distance_z_scores(
     return result
 
 
+def _build_distance_location_shot_rows(
+    rows: Sequence[Mapping[str, Any]],
+    corrected_distances: Sequence[float],
+) -> list[dict[str, Any]]:
+    if len(rows) != len(corrected_distances):
+        raise ValueError("rows and corrected_distances must have equal length.")
+
+    shot_rows: list[dict[str, Any]] = []
+    for row, corrected_distance in zip(rows, corrected_distances):
+        shot_rows.append(
+            {
+                "season": str(row["season"]),
+                "venue_name": str(row["venue_name"]),
+                "shooting_team_id": int(row["shooting_team_id"]),
+                "away_team_id": int(row["away_team_id"]),
+                "shot_type": str(row["shot_type"]),
+                "manpower_state": str(row["manpower_state"]),
+                "corrected_distance_to_goal": float(corrected_distance),
+            }
+        )
+    return shot_rows
+
+
 def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str, Any]:
     run_started_at = time.monotonic()
     _progress("Loading training rows.", run_started_at)
@@ -486,6 +517,17 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
         run_started_at,
     )
 
+    _progress("Computing paired distance-location diagnostics.", run_started_at)
+    distance_shot_rows = _build_distance_location_shot_rows(rows, corrected_distances)
+    paired_distance = compute_paired_away_distance_location_comparisons(
+        distance_shot_rows
+    )
+    _progress(
+        f"Computed paired distance-location diagnostics for "
+        f"{len(paired_distance):,} venue-seasons.",
+        run_started_at,
+    )
+
     _progress("Building baseline and corrected feature matrices.", run_started_at)
     X_baseline = _build_feature_matrix(distances, angles, shot_types)
     X_corrected = _build_feature_matrix(corrected_distances, angles, shot_types)
@@ -521,11 +563,16 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
         f"{len(residual_z_scores):,} residual venue-season z-scores.",
         run_started_at,
     )
+    distance_residual_rows = residual_z_score_rows(
+        residual_z_scores,
+        VENUE_REGIME_METRIC_DISTANCE,
+    )
+    annotated_distance = annotate_distance_location_regime_evidence(
+        distance_residual_rows,
+        paired_distance,
+    )
     distance_regime_diagnostics = classify_rolling_venue_regimes(
-        residual_z_score_rows(
-            residual_z_scores,
-            VENUE_REGIME_METRIC_DISTANCE,
-        )
+        annotated_distance
     )
     frequency_regime_diagnostics = primary_event_frequency_regime_diagnostics(
         annotated_frequency
@@ -550,14 +597,27 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
         "Each shot uses the latest venue distance adjustment from a season before "
         "the shot's season; same-season venue corrections are not used for holdout "
         "rows. Distance residual z-scores are venue-season corrected-distance mean "
-        "z-scores. Rolling venue-regime diagnostics use prior-only rolling "
-        "estimates for production-safe context and centered rolling estimates only "
-        "for exploratory historical-spike labeling. Event-frequency residual "
-        "z-scores use sample-adequate regular-season training attempts as the "
-        "primary gate; blocked-shot and all-attempt frequencies are reported as "
-        "diagnostics and remain outside the current shot-level xG training "
-        "contract."
+        "z-scores. Distance/location candidates are annotated with paired "
+        "visiting-team evidence stratified by shot type and manpower state; "
+        "this diagnostic uses the in-memory prior-corrected distances and does "
+        "not mutate shot_events or venue_bias_corrections. Rolling venue-regime "
+        "diagnostics use prior-only rolling estimates for production-safe "
+        "context and centered rolling estimates only for exploratory "
+        "historical-spike labeling. Event-frequency residual z-scores use "
+        "sample-adequate regular-season training attempts as the primary gate; "
+        "blocked-shot and all-attempt frequencies are reported as diagnostics "
+        "and remain outside the current shot-level xG training contract."
     )
+    distance_candidates = [
+        row for row in distance_regime_diagnostics
+        if row.get("candidate_regime")
+    ]
+    supported_distance_regimes = [
+        row for row in distance_candidates
+        if row.get("evidence_supports_regime")
+    ]
+    metrics["distance_location_candidate_count"] = len(distance_candidates)
+    metrics["distance_location_supported_count"] = len(supported_distance_regimes)
     metrics["event_frequency_primary_scope"] = PRIMARY_EVENT_FREQUENCY_SCOPE
     metrics["event_frequency_primary_group"] = PRIMARY_EVENT_FREQUENCY_GROUP
     metrics["event_frequency_candidate_count"] = len(frequency_candidates)
@@ -569,6 +629,12 @@ def build_metrics(conn: sqlite3.Connection, correction_method: str) -> dict[str,
     metrics["distance_top_regime_diagnostics"] = top_venue_regime_diagnostics(
         distance_regime_diagnostics,
         limit=EVENT_FREQUENCY_REPORT_LIMIT,
+    )
+    metrics["distance_top_paired_diagnostics"] = (
+        top_distance_location_paired_diagnostics(
+            distance_regime_diagnostics,
+            limit=EVENT_FREQUENCY_REPORT_LIMIT,
+        )
     )
     metrics["event_frequency_top_regime_diagnostics"] = (
         top_venue_regime_diagnostics(

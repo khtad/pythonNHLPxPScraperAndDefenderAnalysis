@@ -53,6 +53,60 @@ def test_compute_residual_distance_z_scores_by_season_and_venue():
     assert result["20202021:C"] == pytest.approx(1.224744871)
 
 
+def test_build_distance_location_shot_rows_uses_in_memory_corrected_distances():
+    rows = [
+        {
+            "season": "20202021",
+            "venue_name": "Arena A",
+            "shooting_team_id": 12,
+            "away_team_id": 12,
+            "shot_type": "wrist",
+            "manpower_state": "5v5",
+            "distance_to_goal": 20.0,
+        },
+        {
+            "season": "20202021",
+            "venue_name": "Arena B",
+            "shooting_team_id": 13,
+            "away_team_id": 13,
+            "shot_type": "slap",
+            "manpower_state": "5v4",
+            "distance_to_goal": 18.0,
+        },
+    ]
+
+    shot_rows = exporter._build_distance_location_shot_rows(
+        rows,
+        [17.5, 19.25],
+    )
+
+    assert shot_rows == [
+        {
+            "season": "20202021",
+            "venue_name": "Arena A",
+            "shooting_team_id": 12,
+            "away_team_id": 12,
+            "shot_type": "wrist",
+            "manpower_state": "5v5",
+            "corrected_distance_to_goal": 17.5,
+        },
+        {
+            "season": "20202021",
+            "venue_name": "Arena B",
+            "shooting_team_id": 13,
+            "away_team_id": 13,
+            "shot_type": "slap",
+            "manpower_state": "5v4",
+            "corrected_distance_to_goal": 19.25,
+        },
+    ]
+
+
+def test_build_distance_location_shot_rows_requires_aligned_lengths():
+    with pytest.raises(ValueError, match="equal length"):
+        exporter._build_distance_location_shot_rows([], [12.0])
+
+
 def test_build_feature_matrix_uses_fixed_shot_type_contract():
     matrix = exporter._build_feature_matrix(
         np.array([12.0, 20.0]),

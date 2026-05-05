@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-05-03 (Added rolling venue-regime diagnostics for venue scorekeeper bias)
+> Last updated: 2026-05-05 (Added paired/stratified distance-location venue-regime evidence)
 
 ## Concepts
 
