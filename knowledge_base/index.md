@@ -1,6 +1,6 @@
 # Knowledge Base Index
 
-> Last updated: 2026-05-04 (Recorded live regime-aware venue-correction scorecard result)
+> Last updated: 2026-05-05 (Added paired/stratified distance-location venue-regime evidence)
 
 ## Concepts
 

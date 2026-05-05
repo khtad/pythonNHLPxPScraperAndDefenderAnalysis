@@ -287,3 +287,12 @@
 - Updated `wiki/concepts/venue-scorekeeper-bias.md` - documented that the live scorecard now runs in `regime_aware` mode and still fails because blocking unexplained/confounded residuals remain.
 - Updated `index.md` - refreshed Last updated summary.
 **Notes:** This supersedes the 2026-05-03 note that the committed artifact still needed a regime-aware rerun. The current live artifact treats `|z| >= 2` as a candidate residual rather than an automatic veto; supported `persistent_bias` and `temporary_supported_regime` rows are non-blocking, while `unexplained_or_confounded`, `population_shift_detected`, and `insufficient_evidence` remain blocking. The latest result passes held-out log-loss and home-ice guardrails but fails distance/location residuals (24 blocking regimes, 4 supported regimes) and event-frequency residuals (4 blocking regimes, 23 supported regimes), so venue correction remains exploratory.
+
+### 2026-05-05 - UPDATE
+
+**Action:** Added paired/stratified distance-location venue-regime evidence
+**Source:** `src/venue_bias.py`, `scripts/export_venue_correction_validation_from_db.py`, `scripts/export_venue_correction_validation.py`, `tests/test_venue_bias.py`, `tests/test_venue_correction_validation_export.py`, `tests/test_venue_correction_validation_from_db.py`, `artifacts/venue_correction_validation_latest.md`, `docs/xg_model_roadmap.md`, `docs/xg_model_components/04_scorekeeper_bias.md`
+**Pages touched:**
+- Updated `wiki/concepts/venue-scorekeeper-bias.md` - documented paired visiting-team distance comparisons, shot-type/manpower stratification, evidence thresholds, and the refreshed live scorecard result.
+- Updated `index.md` - refreshed Last updated summary.
+**Notes:** The DB-backed runner now computes distance-location paired evidence from in-memory prior-corrected shot distances without mutating `shot_events` or `venue_bias_corrections`. The 2026-05-05 artifact still fails overall but reduces distance/location blockers to 10 with 18 supported regimes; event-frequency residuals show 5 blockers and 22 supported regimes. Venue correction remains exploratory until both residual gates have zero blocking regimes while log-loss and home-ice guardrails still pass.

@@ -108,6 +108,9 @@ def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "event_frequency_primary_scope",
         "event_frequency_primary_group",
         "distance_top_regime_diagnostics",
+        "distance_top_paired_diagnostics",
+        "distance_location_candidate_count",
+        "distance_location_supported_count",
         "event_frequency_top_regime_diagnostics",
     )
     for metadata_field in metadata_fields:
@@ -172,6 +175,7 @@ def format_scorecard(metrics: dict[str, Any]) -> str:
         f"- Worst event-frequency residual: "
         f"`{metrics['worst_event_frequency_residual_venue']}`\n"
         f"{_format_venue_regime_diagnostics(metrics)}"
+        f"{_format_distance_location_paired_diagnostics(metrics)}"
         f"{_format_event_frequency_anomalies(metrics)}"
         f"{_format_notes(notes)}"
     )
@@ -280,6 +284,46 @@ def _format_event_frequency_anomalies(metrics: dict[str, Any]) -> str:
             f"{_format_optional_float(row.get('paired_mean_diff_per_game'))} | "
             f"{ci_text} | {_format_optional_float(row.get('paired_cohens_d'))} | "
             f"`{row['anomaly_classification']}` | {known_prior} |"
+        )
+    return text + "\n".join(lines) + "\n"
+
+
+def _format_distance_location_paired_diagnostics(metrics: dict[str, Any]) -> str:
+    top_rows = metrics.get("distance_top_paired_diagnostics") or []
+    candidate_count = metrics.get("distance_location_candidate_count", 0)
+    supported_count = metrics.get("distance_location_supported_count", 0)
+    text = (
+        "\n## Distance-Location Paired Diagnostics\n\n"
+        "- Primary distance gate: venue-season corrected-distance residuals "
+        "with visiting-team paired evidence stratified by shot type and manpower state.\n\n"
+        f"- Candidate distance residuals: {candidate_count:,}\n"
+        f"- Supported paired distance regimes: {supported_count:,}\n"
+    )
+    if not top_rows:
+        return text + "\nNo distance-location paired diagnostics exceeded the reporting threshold.\n"
+
+    lines = [
+        "",
+        "| Venue-season | z | Paired diff | 95% CI | d | Pairs | Evidence | "
+        "Evidence classification | Regime classification |",
+        "|--------------|---|-------------|--------|---|-------|----------|"
+        "-------------------------|-----------------------|",
+    ]
+    for row in top_rows:
+        ci_text = (
+            f"[{_format_optional_float(row.get('paired_bootstrap_ci_low'))}, "
+            f"{_format_optional_float(row.get('paired_bootstrap_ci_high'))}]"
+        )
+        evidence = "YES" if row.get("evidence_supports_regime") else "NO"
+        lines.append(
+            f"| `{row['season']}:{row['venue_name']}` | "
+            f"{float(row['residual_z_score']):.3f} | "
+            f"{_format_optional_float(row.get('paired_mean_diff_distance'))} | "
+            f"{ci_text} | {_format_optional_float(row.get('paired_cohens_d'))} | "
+            f"{int(row.get('paired_away_team_seasons', 0)):,} | "
+            f"{evidence} | "
+            f"`{row.get('distance_location_evidence_classification', 'n/a')}` | "
+            f"`{row.get('regime_classification', 'n/a')}` |"
         )
     return text + "\n".join(lines) + "\n"
 

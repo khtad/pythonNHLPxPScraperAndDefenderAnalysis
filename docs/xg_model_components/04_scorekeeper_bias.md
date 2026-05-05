@@ -22,15 +22,20 @@ Estimate and correct rink/venue scorer effects that distort event recording and 
   metrics payload directly from SQLite with forward-chaining temporal CV and
   prior-season-only venue distance corrections under the shared model-training
   contract. It also computes normalized event-frequency diagnostics by
-  venue-season, event group, and game-type scope. The primary frequency gate
-  uses sample-adequate regular-season training attempts; blocked-shot and
-  all-attempt frequencies are diagnostic only. The 2026-05-03 live v5 refresh
-  uses the regime-aware residual gate. It passes held-out log-loss and
-  home-ice guardrails but still fails the residual corrected-distance gate
-  (`max |z| = 4.067`, 24 blocking regimes) and event-frequency residual gate
-  (`max |z| = 3.572`, 4 blocking regimes), so the current correction remains
-  exploratory rather than a production xG training feature.
-- The 2026-05-03 rolling venue-regime extension adds a less brittle
+  venue-season, event group, and game-type scope plus paired distance-location
+  diagnostics from in-memory prior-corrected distances. The distance diagnostic
+  compares each visiting team's corrected shot distance at a venue against that
+  same team's away shots elsewhere in the same season, stratified by shot type
+  and manpower state. The primary frequency gate uses sample-adequate
+  regular-season training attempts; blocked-shot and all-attempt frequencies
+  are diagnostic only. The 2026-05-05 live v5 refresh uses the regime-aware
+  residual gate. It passes held-out log-loss and home-ice guardrails but still
+  fails the residual corrected-distance gate (`max |z| = 4.067`, 10 blocking
+  regimes) and event-frequency residual gate (`max |z| = 3.572`, 5 blocking
+  regimes), so the current correction remains exploratory rather than a
+  production xG training feature.
+- The 2026-05-03 rolling venue-regime extension, expanded with paired
+  distance evidence on 2026-05-05, adds a less brittle
   acceptance path for historically real scorer spikes. `src/venue_bias.py`
   now computes prior-only rolling residual estimates for production-safe
   context, centered rolling estimates for exploratory historical diagnosis,

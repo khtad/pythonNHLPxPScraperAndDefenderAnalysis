@@ -35,6 +35,12 @@ EVENT_FREQUENCY_MIN_ABS_COHENS_D = 0.2
 EVENT_FREQUENCY_BOOTSTRAP_SAMPLES = 10_000
 EVENT_FREQUENCY_BOOTSTRAP_ALPHA = 0.05
 EVENT_FREQUENCY_BOOTSTRAP_SEED = 42
+DISTANCE_LOCATION_VALUE_FIELD = "corrected_distance_to_goal"
+DISTANCE_LOCATION_STRATIFY_FIELDS = ("shot_type", "manpower_state")
+DISTANCE_LOCATION_MIN_PAIRED_TEAM_SEASONS = (
+    EVENT_FREQUENCY_MIN_PAIRED_TEAM_SEASONS
+)
+DISTANCE_LOCATION_MIN_ABS_COHENS_D = EVENT_FREQUENCY_MIN_ABS_COHENS_D
 
 VENUE_REGIME_METRIC_DISTANCE = "distance_location"
 VENUE_REGIME_METRIC_EVENT_FREQUENCY = "event_frequency"
@@ -243,6 +249,127 @@ def annotate_event_frequency_anomalies(
         item["anomaly_classification"] = _classify_event_frequency_anomaly(item)
         annotated.append(item)
     return annotated
+
+
+def compute_paired_away_distance_location_comparisons(
+    shot_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compare visiting-team corrected distances at a venue against elsewhere.
+
+    The comparison controls for visitor team-season and shot mix by matching on
+    ``shot_type`` and ``manpower_state``. Each paired diff is one visiting
+    team's weighted mean at-venue-minus-elsewhere corrected distance for the
+    same season.
+    """
+    rows_by_season: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in shot_rows:
+        if not _is_visiting_team_shot(row):
+            continue
+        distance = _finite_float_or_none(row.get(DISTANCE_LOCATION_VALUE_FIELD))
+        if distance is None:
+            continue
+        stratum = _distance_location_stratum(row)
+        if stratum is None:
+            continue
+        rows_by_season[str(row["season"])].append(
+            {
+                "venue_name": str(row["venue_name"]),
+                "away_team_id": int(row["away_team_id"]),
+                "stratum": stratum,
+                "distance": distance,
+            }
+        )
+
+    comparisons: list[dict[str, Any]] = []
+    for season, rows in rows_by_season.items():
+        venues = sorted({row["venue_name"] for row in rows})
+        all_stats: dict[tuple[int, tuple[str, ...]], list[float]] = defaultdict(
+            lambda: [0.0, 0.0]
+        )
+        venue_stats: dict[tuple[str, int, tuple[str, ...]], list[float]] = defaultdict(
+            lambda: [0.0, 0.0]
+        )
+        for row in rows:
+            team_id = int(row["away_team_id"])
+            stratum = tuple(row["stratum"])
+            distance = float(row["distance"])
+            all_values = all_stats[(team_id, stratum)]
+            all_values[0] += distance
+            all_values[1] += 1.0
+            venue_values = venue_stats[(row["venue_name"], team_id, stratum)]
+            venue_values[0] += distance
+            venue_values[1] += 1.0
+
+        for venue_name in venues:
+            team_weighted_diffs: dict[int, list[float]] = defaultdict(
+                lambda: [0.0, 0.0]
+            )
+            for (
+                row_venue,
+                team_id,
+                stratum,
+            ), at_values in venue_stats.items():
+                if row_venue != venue_name:
+                    continue
+                total_values = all_stats[(team_id, stratum)]
+                elsewhere_count = total_values[1] - at_values[1]
+                if elsewhere_count <= 0:
+                    continue
+                at_mean = at_values[0] / at_values[1]
+                elsewhere_mean = (
+                    total_values[0] - at_values[0]
+                ) / elsewhere_count
+                at_count = at_values[1]
+                diff_values = team_weighted_diffs[team_id]
+                diff_values[0] += (at_mean - elsewhere_mean) * at_count
+                diff_values[1] += at_count
+
+            diffs = [
+                weighted_sum / weight
+                for weighted_sum, weight in team_weighted_diffs.values()
+                if weight > 0
+            ]
+            comparisons.append(
+                {
+                    "season": season,
+                    "venue_name": venue_name,
+                    **_summarize_paired_distance_diffs(diffs),
+                }
+            )
+
+    return sorted(
+        comparisons,
+        key=lambda item: (
+            item["season"],
+            item["venue_name"],
+        ),
+    )
+
+
+def annotate_distance_location_regime_evidence(
+    residual_rows: Sequence[Mapping[str, Any]],
+    paired_comparisons: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach paired distance-location support to residual regime rows."""
+    comparison_lookup = {
+        _distance_location_comparison_key(row): row
+        for row in paired_comparisons
+    }
+    annotated: list[dict[str, Any]] = []
+    for row in residual_rows:
+        item = dict(row)
+        comparison = comparison_lookup.get(_distance_location_comparison_key(row), {})
+        item.update(_distance_location_comparison_fields(comparison))
+        paired_supports_regime = _paired_distance_evidence_supports_residual(item)
+        item["evidence_supports_regime"] = bool(
+            item.get("evidence_supports_regime", False)
+            or paired_supports_regime
+        )
+        item["distance_location_evidence_classification"] = (
+            _classify_distance_location_evidence(item)
+        )
+        annotated.append(item)
+    return _sort_regime_rows(annotated)
 
 
 def primary_event_frequency_residual_z_scores(
@@ -558,7 +685,56 @@ def top_event_frequency_anomalies(
     ]
 
 
-def _summarize_paired_diffs(diffs: Iterable[float]) -> dict[str, Any]:
+def top_distance_location_paired_diagnostics(
+    regime_diagnostics: Sequence[Mapping[str, Any]],
+    limit: int = 10,
+    candidates_only: bool = True,
+) -> list[dict[str, Any]]:
+    """Return largest distance residuals with paired evidence details."""
+    rows = [
+        dict(row)
+        for row in regime_diagnostics
+        if row.get("metric_name") == VENUE_REGIME_METRIC_DISTANCE
+        and _finite_float_or_none(row.get(VENUE_REGIME_RESIDUAL_FIELD)) is not None
+        and (not candidates_only or row.get("candidate_regime"))
+    ]
+    rows.sort(
+        key=lambda row: abs(float(row[VENUE_REGIME_RESIDUAL_FIELD])),
+        reverse=True,
+    )
+    return [
+        {
+            "season": row["season"],
+            "venue_name": row["venue_name"],
+            VENUE_REGIME_RESIDUAL_FIELD: row[VENUE_REGIME_RESIDUAL_FIELD],
+            "regime_classification": row.get(
+                "regime_classification",
+                VENUE_REGIME_NOT_FLAGGED,
+            ),
+            "evidence_supports_regime": row.get(
+                "evidence_supports_regime",
+                False,
+            ),
+            "paired_away_team_seasons": row.get("paired_away_team_seasons", 0),
+            "paired_mean_diff_distance": row.get("paired_mean_diff_distance"),
+            "paired_bootstrap_ci_low": row.get("paired_bootstrap_ci_low"),
+            "paired_bootstrap_ci_high": row.get("paired_bootstrap_ci_high"),
+            "paired_wilcoxon_p_value": row.get("paired_wilcoxon_p_value"),
+            "paired_cohens_d": row.get("paired_cohens_d"),
+            "paired_sample_adequate": row.get("paired_sample_adequate", False),
+            "distance_location_evidence_classification": row.get(
+                "distance_location_evidence_classification",
+                ANOMALY_NOT_FLAGGED,
+            ),
+        }
+        for row in rows[:limit]
+    ]
+
+
+def _summarize_paired_diffs(
+    diffs: Iterable[float],
+    min_paired_team_seasons: int = EVENT_FREQUENCY_MIN_PAIRED_TEAM_SEASONS,
+) -> dict[str, Any]:
     diff_array = np.asarray(list(diffs), dtype=float)
     diff_array = diff_array[np.isfinite(diff_array)]
     n_pairs = int(len(diff_array))
@@ -593,8 +769,24 @@ def _summarize_paired_diffs(diffs: Iterable[float]) -> dict[str, Any]:
         "paired_wilcoxon_p_value": p_value,
         "paired_cohens_d": float(cohens_d),
         "paired_sample_adequate": bool(
-            n_pairs >= EVENT_FREQUENCY_MIN_PAIRED_TEAM_SEASONS
+            n_pairs >= min_paired_team_seasons
         ),
+    }
+
+
+def _summarize_paired_distance_diffs(diffs: Iterable[float]) -> dict[str, Any]:
+    summary = _summarize_paired_diffs(
+        diffs,
+        min_paired_team_seasons=DISTANCE_LOCATION_MIN_PAIRED_TEAM_SEASONS,
+    )
+    return {
+        "paired_away_team_seasons": summary["paired_away_team_seasons"],
+        "paired_mean_diff_distance": summary["paired_mean_diff_per_game"],
+        "paired_bootstrap_ci_low": summary["paired_bootstrap_ci_low"],
+        "paired_bootstrap_ci_high": summary["paired_bootstrap_ci_high"],
+        "paired_wilcoxon_p_value": summary["paired_wilcoxon_p_value"],
+        "paired_cohens_d": summary["paired_cohens_d"],
+        "paired_sample_adequate": summary["paired_sample_adequate"],
     }
 
 
@@ -646,6 +838,30 @@ def _prefixed_comparison_fields(comparison: Mapping[str, Any]) -> dict[str, Any]
     }
 
 
+def _distance_location_comparison_fields(
+    comparison: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not comparison:
+        return {
+            "paired_away_team_seasons": 0,
+            "paired_mean_diff_distance": None,
+            "paired_bootstrap_ci_low": None,
+            "paired_bootstrap_ci_high": None,
+            "paired_wilcoxon_p_value": None,
+            "paired_cohens_d": None,
+            "paired_sample_adequate": False,
+        }
+    return {
+        "paired_away_team_seasons": comparison["paired_away_team_seasons"],
+        "paired_mean_diff_distance": comparison["paired_mean_diff_distance"],
+        "paired_bootstrap_ci_low": comparison["paired_bootstrap_ci_low"],
+        "paired_bootstrap_ci_high": comparison["paired_bootstrap_ci_high"],
+        "paired_wilcoxon_p_value": comparison["paired_wilcoxon_p_value"],
+        "paired_cohens_d": comparison["paired_cohens_d"],
+        "paired_sample_adequate": comparison["paired_sample_adequate"],
+    }
+
+
 def _is_candidate_frequency_anomaly(
     z_score: Any,
     z_score_threshold: float,
@@ -672,17 +888,79 @@ def _classify_event_frequency_anomaly(row: Mapping[str, Any]) -> str:
 
 
 def _paired_evidence_supports_z_score(row: Mapping[str, Any]) -> bool:
-    ci_low = row.get("paired_bootstrap_ci_low")
-    ci_high = row.get("paired_bootstrap_ci_high")
-    cohens_d = row.get("paired_cohens_d")
-    z_score = float(row["frequency_z_score"])
+    return _paired_evidence_supports_direction(
+        row["frequency_z_score"],
+        row.get("paired_bootstrap_ci_low"),
+        row.get("paired_bootstrap_ci_high"),
+        row.get("paired_cohens_d"),
+        min_abs_cohens_d=EVENT_FREQUENCY_MIN_ABS_COHENS_D,
+    )
+
+
+def _paired_distance_evidence_supports_residual(row: Mapping[str, Any]) -> bool:
+    if not row.get("paired_sample_adequate", False):
+        return False
+    return _paired_evidence_supports_direction(
+        row[VENUE_REGIME_RESIDUAL_FIELD],
+        row.get("paired_bootstrap_ci_low"),
+        row.get("paired_bootstrap_ci_high"),
+        row.get("paired_cohens_d"),
+        min_abs_cohens_d=DISTANCE_LOCATION_MIN_ABS_COHENS_D,
+    )
+
+
+def _paired_evidence_supports_direction(
+    z_score_value: Any,
+    ci_low: Any,
+    ci_high: Any,
+    cohens_d: Any,
+    min_abs_cohens_d: float,
+) -> bool:
+    z_score = float(z_score_value)
     if ci_low is None or ci_high is None or cohens_d is None:
         return False
-    if abs(float(cohens_d)) < EVENT_FREQUENCY_MIN_ABS_COHENS_D:
+    if abs(float(cohens_d)) < min_abs_cohens_d:
         return False
     if z_score > 0:
         return bool(float(ci_low) > 0)
     return bool(float(ci_high) < 0)
+
+
+def _classify_distance_location_evidence(row: Mapping[str, Any]) -> str:
+    z_score = row.get(VENUE_REGIME_RESIDUAL_FIELD)
+    if z_score is None or not np.isfinite(float(z_score)):
+        return ANOMALY_CALCULATION_ERROR_SUSPECTED
+    if abs(float(z_score)) < EVENT_FREQUENCY_Z_SCORE_THRESHOLD:
+        return ANOMALY_NOT_FLAGGED
+    if not row.get("paired_sample_adequate", False):
+        return ANOMALY_INSUFFICIENT_EVIDENCE
+    if _paired_distance_evidence_supports_residual(row):
+        return ANOMALY_REAL_SCOREKEEPER_REGIME_SUPPORTED
+    return ANOMALY_HOCKEY_CONTEXT_CONFOUNDED
+
+
+def _distance_location_comparison_key(row: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        str(row["season"]),
+        str(row["venue_name"]),
+    )
+
+
+def _is_visiting_team_shot(row: Mapping[str, Any]) -> bool:
+    try:
+        return bool(int(row["shooting_team_id"]) == int(row["away_team_id"]))
+    except (TypeError, ValueError):
+        return False
+
+
+def _distance_location_stratum(row: Mapping[str, Any]) -> tuple[str, ...] | None:
+    values = []
+    for field in DISTANCE_LOCATION_STRATIFY_FIELDS:
+        value = row.get(field)
+        if value is None:
+            return None
+        values.append(str(value))
+    return tuple(values)
 
 
 def _split_venue_season_label(label: str) -> tuple[str, str]:
